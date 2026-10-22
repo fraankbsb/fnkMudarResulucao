@@ -284,8 +284,7 @@ class VideoConverterApp(ctk.CTk):
             if not info.get('success'):
                 self.btn_update.configure(state='normal', text='Atualizar App (Git Sync)')
                 self.lbl_sync_status.configure(text='Erro de conexao', text_color='#E57373')
-                messagebox.showerror('Git Sync', f'Falha ao verificar atualizacoes:
-' + str(info.get('message')))
+                messagebox.showerror('Git Sync', 'Falha ao verificar atualizacoes: ' + str(info.get('message', '')))
                 return
 
             if info.get('behind'):
@@ -296,8 +295,7 @@ class VideoConverterApp(ctk.CTk):
                 else:
                     self.btn_update.configure(state='normal', text='Atualizar App (Git Sync)')
                     self.lbl_sync_status.configure(text='Erro ao puxar', text_color='#E57373')
-                    messagebox.showerror('Erro', f'Falha ao baixar mudancas:
-' + str(msg))
+                    messagebox.showerror('Erro', 'Falha ao baixar mudancas: ' + str(msg))
             else:
                 self.btn_update.configure(state='normal', text='Atualizar App (Git Sync)')
                 self.lbl_sync_status.configure(text='Ja esta na versao mais recente!', text_color='#81C784')
