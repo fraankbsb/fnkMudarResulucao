@@ -5,7 +5,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from core.converter import convert_video
+from core.converter import convert_video, clean_metadata
 
 def main():
     parser = argparse.ArgumentParser(
@@ -33,12 +33,19 @@ def main():
     parser.add_argument('--capa', help='Imagem de capa de abertura')
     parser.add_argument('--capa-segundos', type=float, default=0.1, help='Duracao da capa')
     parser.add_argument('--capa-ajuste', choices=['preencher', 'inteira', 'esticar'], default='preencher')
+    parser.add_argument('--manter-metadados', action='store_true', help='Preservar metadados de origem na conversao')
+    parser.add_argument('--somente-limpar-metadados', action='store_true', help='Limpar a fila sem recodificar video/audio')
     args = parser.parse_args()
+    if args.somente_limpar_metadados and args.manter_metadados:
+        parser.error('Escolha limpar ou manter os metadados.')
     if (args.width is None) != (args.height is None):
         parser.error('Informe --width e --height juntos.')
     edits = dict(sharpen_strength=args.sharpen_strength, corte_inicio=args.corte_inicio,
                  corte_fim=args.corte_fim, velocidade=args.velocidade, espelhar=args.espelhar,
-                 capa_path=args.capa, capa_segundos=args.capa_segundos, capa_ajuste=args.capa_ajuste)
+                 capa_path=args.capa, capa_segundos=args.capa_segundos, capa_ajuste=args.capa_ajuste,
+                 limpar_metadados=not args.manter_metadados)
+
+    converter = clean_metadata if args.somente_limpar_metadados else convert_video
 
     # Define a resolução alvo
     if args.width and args.height:
@@ -61,13 +68,14 @@ def main():
         if not files:
             print(f'[AVISO] Nenhum video compativel encontrado em: {input_path}')
             return
-        out_dir = os.path.abspath(args.output) if args.output else os.path.join(input_path, f'convertidos_{target_res[0]}x{target_res[1]}')
+        out_dir = os.path.abspath(args.output) if args.output else os.path.join(input_path, 'metadados_limpos' if args.somente_limpar_metadados else f'convertidos_{target_res[0]}x{target_res[1]}')
         os.makedirs(out_dir, exist_ok=True)
         print(f'[LOTE] Processando {len(files)} video(s) para {target_res[0]}x{target_res[1]}...')
         failures = 0
         for idx, f in enumerate(files, 1):
             name, ext = os.path.splitext(os.path.basename(f))
-            dest = os.path.join(out_dir, f'{name}_{target_res[0]}x{target_res[1]}.mp4')
+            dest_name = f'{name}_metadados_limpos{ext}' if args.somente_limpar_metadados else f'{name}_{target_res[0]}x{target_res[1]}.mp4'
+            dest = os.path.join(out_dir, dest_name)
             print(f'\n[{idx}/{len(files)}] Convertendo: {os.path.basename(f)} -> {os.path.basename(dest)}')
             try:
                 def progress(p, text):
@@ -75,18 +83,10 @@ def main():
                     filled = int(bar_len * p)
                     bar = '=' * filled + '-' * (bar_len - filled)
                     print(f'\rProgresso: [{bar}] {text}', end='', flush=True)
-                convert_video(
-                    input_path=f,
-                    output_path=dest,
-                    mode=args.mode,
-                    target_resolution=target_res,
-                    blur_strength=args.blur_strength,
-                    bg_color=args.bg_color,
-                    crf=args.crf,
-                    preset=args.preset,
-                    progress_callback=progress,
-                    **edits
-                )
+                options = {} if args.somente_limpar_metadados else dict(mode=args.mode,
+                    target_resolution=target_res, blur_strength=args.blur_strength, bg_color=args.bg_color,
+                    crf=args.crf, preset=args.preset, **edits)
+                converter(f, dest, progress_callback=progress, **options)
                 print('\n[CONCLUIDO COM SUCESSO]')
             except Exception as e:
                 failures += 1
@@ -101,10 +101,13 @@ def main():
             out_file = os.path.abspath(args.output)
         else:
             base, ext = os.path.splitext(input_path)
-            out_file = f'{base}_{target_res[0]}x{target_res[1]}.mp4'
+            out_file = f'{base}_metadados_limpos{ext}' if args.somente_limpar_metadados else f'{base}_{target_res[0]}x{target_res[1]}.mp4'
 
         print(f'[INICIO] Processando video: {input_path}')
-        print(f'         Modo: {args.mode} | Resolucao alvo: {target_res[0]}x{target_res[1]} ({args.target})')
+        if args.somente_limpar_metadados:
+            print('         Limpeza de metadados sem recodificar video/audio')
+        else:
+            print(f'         Modo: {args.mode} | Resolucao alvo: {target_res[0]}x{target_res[1]} ({args.target})')
         print(f'         Saida: {out_file}')
 
         def progress(p, text):
@@ -115,18 +118,10 @@ def main():
 
         start = time.time()
         try:
-            convert_video(
-                input_path=input_path,
-                output_path=out_file,
-                mode=args.mode,
-                target_resolution=target_res,
-                blur_strength=args.blur_strength,
-                bg_color=args.bg_color,
-                crf=args.crf,
-                preset=args.preset,
-                progress_callback=progress,
-                **edits
-            )
+            options = {} if args.somente_limpar_metadados else dict(mode=args.mode,
+                target_resolution=target_res, blur_strength=args.blur_strength, bg_color=args.bg_color,
+                crf=args.crf, preset=args.preset, **edits)
+            converter(input_path, out_file, progress_callback=progress, **options)
             elapsed = time.time() - start
             print(f'\n[CONCLUIDO] Video gerado em {elapsed:.2f} segundos: {out_file}')
         except Exception as e:

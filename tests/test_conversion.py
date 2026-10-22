@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from PIL import Image, ImageChops, ImageStat
 
-from core.converter import convert_video, get_video_metadata
+from core.converter import convert_video, get_video_metadata, clean_metadata
 from core.preview import generate_preview_frame
 
 
@@ -144,6 +144,52 @@ class ConversionTests(unittest.TestCase):
         result = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / 'main.py'),
             '--cli', '-i', str(batch)], capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
+
+    def tagged_source(self):
+        chapters = self.root / 'chapters.txt'
+        chapters.write_text(';FFMETADATA1\ntitle=TITULO PRIVADO\nartist=AUTOR PRIVADO\ncomment=COMENTARIO PRIVADO\n'
+            '[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=1000\ntitle=CAPITULO PRIVADO\n', encoding='utf-8')
+        tagged = self.root / 'tagged.mp4'
+        self.run_ffmpeg('-i', str(self.source), '-i', str(chapters), '-map', '0',
+            '-map_metadata', '1', '-map_chapters', '1', '-c', 'copy',
+            '-metadata', 'creation_time=2020-01-01T00:00:00Z',
+            '-metadata', 'location=+01.23+004.56/', str(tagged))
+        return tagged
+
+    def assert_metadata_clean(self, path):
+        raw = subprocess.check_output(['ffprobe', '-v', 'quiet', '-show_format',
+            '-show_streams', '-show_chapters', '-of', 'json', str(path)]).decode('utf-8')
+        for value in ('PRIVADO', '2020-01-01', '+01.23'):
+            self.assertNotIn(value, raw)
+        self.assertFalse(json.loads(raw).get('chapters'))
+
+    def test_metadata_removal_without_reencoding(self):
+        source = self.tagged_source()
+        output = self.root / 'cleaned.mp4'
+        self.assertTrue(clean_metadata(str(source), str(output)))
+        self.assert_metadata_clean(output)
+        for stream in ('0:v:0', '0:a:0'):
+            def packet_hash(path):
+                return subprocess.check_output(['ffmpeg', '-v', 'error', '-i', str(path),
+                    '-map', stream, '-c', 'copy', '-f', 'hash', '-hash', 'sha256', '-'])
+            self.assertEqual(packet_hash(source), packet_hash(output))
+
+    def test_metadata_removal_during_conversion_and_opt_out(self):
+        source = self.tagged_source()
+        output = self.convert(source=source)
+        self.assert_metadata_clean(output)
+        output = self.convert(source=source, limpar_metadados=False)
+        self.assertEqual(self.probe(output)['format']['tags']['title'], 'TITULO PRIVADO')
+
+    def test_cli_metadata_only(self):
+        source = self.tagged_source()
+        output = self.root / 'cli_clean.mp4'
+        result = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / 'main.py'),
+            '--cli', '-i', str(source), '-o', str(output), '--somente-limpar-metadados'],
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assert_metadata_clean(output)
+        self.assertEqual(get_video_metadata(str(output)).width, 160)
 
     def test_invalid_edits_preserve_existing_output(self):
         output = self.root / 'existing.mp4'

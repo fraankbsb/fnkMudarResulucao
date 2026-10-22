@@ -31,7 +31,10 @@ Aplicacao profissional de alto desempenho para conversao bidirecional e adaptaca
 - **Pre-Visualizacao em Tempo Real:** Exibicao dinamica na interface grafica do resultado adaptado proporcionalmente a cada formato selecionado antes de renderizar.
 - **Edicao integrada:** Remocao de segundos do inicio e do fim, velocidade de 0.25x a 4x, espelhamento horizontal e nitidez de 0 a 2.
 - **Capa de abertura:** Imagem com duracao configuravel, nos modos preencher, inteira (com barras) ou esticar. O tempo e ajustado ao quadro mais proximo, com no minimo um quadro. A capa fica silenciosa e o audio acompanha o inicio do corpo do video.
-- **Previa com linha de tempo:** Arraste o controle para conferir o resultado com os cortes, a capa e os ajustes. Play/Pause reproduz a previa sem audio; a taxa de atualizacao depende do processamento de cada quadro pelo FFmpeg.
+- **Previa continua:** Play/Pause no centro do video; clicar no video tambem alterna reproducao e pausa. O controle se esconde durante a reproducao e reaparece ao mover o mouse. Um unico FFmpeg decodifica continuamente, ate 30 fps, em tamanho leve de no maximo 640x640, com fila de apenas seis quadros. A previa continua sem audio.
+- **Enquadramento por resolucao:** A previa preserva exatamente a proporcao escolhida (4:5, 9:16, 1:1, 16:9 ou 4:3), adapta-se ao espaco da janela e identifica as dimensoes reais da saida. Trocar ajustes ou proporcao substitui a previa anterior.
+- **Percentuais visiveis:** Desfoque de 0 a 100% corresponde a 0 a 80; nitidez de 0 a 100% corresponde a 0 a 2; velocidade 100% e normal. O CRF mostra o valor numerico e sua posicao percentual na escala (100% corresponde a CRF 0; 0% a CRF 51). Esse percentual e uma referencia do controle, nao uma medida de qualidade do arquivo. A linha de tempo tambem mostra o percentual reproduzido.
+- **Limpeza de metadados:** Secao propria, ativada por padrao na conversao. Remove titulo, autor, comentarios, datas, localizacao e capitulos, mantendo dados tecnicos de reproducao e orientacao. O botao **Limpar metadados da fila (sem converter)** cria copias com sufixo `_metadados_limpos` mantendo a extensao, a resolucao e os fluxos de video/audio sem recodificar. O original e preservado.
 - **Configuracoes salvas:** Aplique os tres presets incluidos ou salve e importe configuracoes em JSON. Caminhos de capas sao locais ao computador.
 - **Audio:** Copia direta sem perdas quando nao ha cortes, capa ou mudanca de velocidade. Com essas edicoes, o audio e sincronizado e recodificado em AAC a 192 kb/s. Videos sem audio tambem sao aceitos.
 - **Saida MP4:** A interface gera H.264 em MP4 e acrescenta um numero quando o nome de destino ja existe. Cancelamentos e falhas descartam o arquivo temporario e preservam uma saida preexistente.
@@ -132,3 +135,16 @@ powershell -ExecutionPolicy Bypass -File .\setup_desktop.ps1
 ```
 
 O caminho de instalacao pode ser diferente em cada computador. O atalho e criado no Desktop do usuario atual e aponta para a pasta clonada naquela maquina. Para receber atualizacoes, basta abrir novamente pelo atalho; para desenvolver nos dois PCs, sincronize antes de trocar de computador.
+
+
+### Limpar metadados pela CLI
+
+Limpar sem alterar resolucao, enquadramento ou compressao:
+
+```powershell
+python main.py --cli -i "video.mp4" --somente-limpar-metadados
+```
+
+Tambem aceita uma pasta inteira. Na conversao normal, a limpeza ja vem ativada; para preservar os metadados de origem, use `--manter-metadados` ou desmarque a opcao na interface.
+
+A previa usa uma versao reduzida dos mesmos filtros de enquadramento da exportacao; o desfoque acompanha proporcionalmente a escala da previa. A exportacao conserva a resolucao selecionada. Os testes cobrem as cinco proporcoes, a reproducao continua, pausa/retomada, fila limitada, capas, cortes, espelho, limpeza de campos pessoais e preservacao dos fluxos na limpeza sem recodificacao.

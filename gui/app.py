@@ -2,7 +2,6 @@ import os
 import json
 import math
 import queue
-import tempfile
 from pathlib import Path
 import sys
 import threading
@@ -10,11 +9,11 @@ import time
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
-from PIL import Image
+from PIL import Image, ImageTk
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from core.converter import convert_video, get_video_metadata, PRESET_RATIOS, get_edit_timeline
-from core.preview import generate_preview_frame
+from core.converter import convert_video, get_video_metadata, PRESET_RATIOS, get_edit_timeline, clean_metadata
+from core.playback import PreviewStream
 from core.updater import get_git_status, restart_app
 
 ctk.set_appearance_mode('dark')
@@ -38,13 +37,17 @@ class VideoConverterApp(ctk.CTk):
         self._ui_events = queue.Queue()
         self._metadata_cache = {}
         self._preview_busy = False
+        self._preview_stream = None
+        self._poll_timer = None
+        self._overlay_timer = None
+        self._last_preview_image = None
+        self._pending_frame = None
         self._playing = False
-        self._play_timer = None
         self._preview_duration = 0.0
         self._preview_position = 0.0
         self._closed = False
         self._build_ui()
-        self.after(30, self._drain_ui_events)
+        self._ui_timer = self.after(30, self._drain_ui_events)
         self.protocol('WM_DELETE_WINDOW', self._close)
         threading.Thread(target=self._check_update_silent, daemon=True).start()
 
@@ -201,7 +204,9 @@ class VideoConverterApp(ctk.CTk):
             command=lambda _: self._schedule_preview_update(immediate=False)
         )
         self.slider_blur.set(35)
-        self.slider_blur.pack(side='right', expand=True, fill='x', padx=(10, 0))
+        self.slider_blur.pack(side='left', expand=True, fill='x', padx=10)
+        self.lbl_blur_value = ctk.CTkLabel(row_blur, width=95)
+        self.lbl_blur_value.pack(side='right')
 
         row_color = ctk.CTkFrame(adv_sec, fg_color='transparent')
         row_color.pack(fill='x', padx=10, pady=4)
@@ -216,9 +221,12 @@ class VideoConverterApp(ctk.CTk):
         row_crf = ctk.CTkFrame(adv_sec, fg_color='transparent')
         row_crf.pack(fill='x', padx=10, pady=(4, 10))
         ctk.CTkLabel(row_crf, text='Qualidade CRF (menor = melhor):').pack(side='left')
-        self.slider_crf = ctk.CTkSlider(row_crf, from_=0, to=51, number_of_steps=51)
+        self.slider_crf = ctk.CTkSlider(row_crf, from_=0, to=51, number_of_steps=51,
+            command=lambda _: self._update_percentages())
         self.slider_crf.set(18)
-        self.slider_crf.pack(side='right', expand=True, fill='x', padx=(10, 0))
+        self.slider_crf.pack(side='left', expand=True, fill='x', padx=10)
+        self.lbl_crf_value = ctk.CTkLabel(row_crf, width=155)
+        self.lbl_crf_value.pack(side='right')
 
         edit_sec = ctk.CTkFrame(left_panel, corner_radius=8)
         edit_sec.pack(fill='x', padx=10, pady=8)
@@ -239,6 +247,12 @@ class VideoConverterApp(ctk.CTk):
             row.pack(fill='x', padx=10, pady=4)
             ctk.CTkLabel(row, text=label).pack(side='left')
             ctk.CTkEntry(row, textvariable=variable, width=95).pack(side='right')
+            if variable is self.var_sharpen:
+                self.lbl_sharpen_value = ctk.CTkLabel(row, width=80)
+                self.lbl_sharpen_value.pack(side='right', padx=8)
+            elif variable is self.var_speed:
+                self.lbl_speed_value = ctk.CTkLabel(row, width=80)
+                self.lbl_speed_value.pack(side='right', padx=8)
         ctk.CTkCheckBox(edit_sec, text='Espelhar horizontalmente', variable=self.var_mirror,
                         command=lambda: self._schedule_preview_update()).pack(anchor='w', padx=10, pady=8)
         ctk.CTkLabel(edit_sec, text='Capa de abertura (opcional):').pack(anchor='w', padx=10)
@@ -257,6 +271,23 @@ class VideoConverterApp(ctk.CTk):
         for variable in (self.var_sharpen, self.var_start, self.var_end, self.var_speed,
                          self.var_cover, self.var_cover_seconds):
             variable.trace_add('write', lambda *_: self._schedule_preview_update())
+
+        ctk.CTkLabel(edit_sec, text='100% de velocidade = normal; nitidez 100% = 2.0.',
+            font=ctk.CTkFont(size=11), wraplength=440).pack(anchor='w', padx=10, pady=4)
+        self._update_percentages()
+
+        metadata_sec = ctk.CTkFrame(left_panel, corner_radius=8)
+        metadata_sec.pack(fill='x', padx=10, pady=8)
+        ctk.CTkLabel(metadata_sec, text='Limpeza de Metadados', font=ctk.CTkFont(weight='bold')).pack(anchor='w', padx=10, pady=8)
+        self.var_clean_metadata = tk.BooleanVar(value=True)
+        ctk.CTkCheckBox(metadata_sec, text='Remover metadados pessoais na conversao',
+                       variable=self.var_clean_metadata).pack(anchor='w', padx=10, pady=4)
+        ctk.CTkLabel(metadata_sec, text='Remove autor, titulo, comentarios, datas e localizacao.\nMantem os dados tecnicos necessarios para reproduzir o video.',
+                    justify='left', wraplength=450, font=ctk.CTkFont(size=11)).pack(anchor='w', padx=10, pady=4)
+        self.btn_clean_metadata = ctk.CTkButton(metadata_sec,
+            text='Limpar metadados da fila (sem converter)',
+            command=lambda: self._start_conversion(metadata_only=True))
+        self.btn_clean_metadata.pack(fill='x', padx=10, pady=(4, 10))
 
         preset_sec = ctk.CTkFrame(left_panel, corner_radius=8)
         preset_sec.pack(fill='x', padx=10, pady=8)
@@ -308,24 +339,28 @@ class VideoConverterApp(ctk.CTk):
         self.preview_canvas_frame.grid_rowconfigure(0, weight=1)
         self.preview_canvas_frame.grid_columnconfigure(0, weight=1)
 
-        self.lbl_preview_img = ctk.CTkLabel(self.preview_canvas_frame, text='Selecione um video para gerar o preview')
-        self.lbl_preview_img.grid(row=0, column=0, padx=10, pady=10)
-
-        self.btn_refresh_prev = ctk.CTkButton(
-            right_panel, text='Atualizar Preview', height=32,
-            command=lambda: self._schedule_preview_update(immediate=True)
-        )
-        self.btn_refresh_prev.grid(row=2, column=0, padx=12, pady=(6, 12), sticky='ew')
-
+        self.preview_canvas = tk.Canvas(self.preview_canvas_frame, bg='#15171C',
+            highlightthickness=0, width=280, height=300)
+        self.preview_canvas.grid(row=0, column=0, sticky='nsew', padx=4, pady=4)
+        self.preview_canvas.bind('<Configure>', lambda _: self._draw_preview())
+        self.preview_canvas.bind('<Button-1>', lambda _: self._toggle_play())
+        self.preview_canvas.bind('<Motion>', lambda _: self._show_play_overlay())
+        self.preview_canvas.create_text(140, 150, text='Selecione um video', fill='white', tags='message')
+        self.btn_play = ctk.CTkButton(self.preview_canvas_frame, text='▶',
+            width=58, height=58, corner_radius=29, font=ctk.CTkFont(size=25),
+            state='disabled', command=self._toggle_play)
+        self.btn_play.place(relx=0.5, rely=0.5, anchor='center')
+        self.lbl_preview_format = ctk.CTkLabel(right_panel, text='4:5 | 1080 x 1350 | sem audio')
+        self.lbl_preview_format.grid(row=2, column=0, padx=12, pady=2, sticky='ew')
         self.preview_slider = ctk.CTkSlider(right_panel, from_=0, to=1,
             command=self._seek_preview, state='disabled')
         self.preview_slider.set(0)
         self.preview_slider.grid(row=3, column=0, padx=12, pady=4, sticky='ew')
-        self.lbl_preview_time = ctk.CTkLabel(right_panel, text='0.00 / 0.00 s')
+        self.lbl_preview_time = ctk.CTkLabel(right_panel, text='0.00 / 0.00 s | 0%')
         self.lbl_preview_time.grid(row=4, column=0, padx=12, pady=2)
-        self.btn_play = ctk.CTkButton(right_panel, text='Reproduzir previa (sem audio)',
-            state='disabled', command=self._toggle_play)
-        self.btn_play.grid(row=5, column=0, padx=12, pady=(4, 12), sticky='ew')
+        self.btn_refresh_prev = ctk.CTkButton(right_panel, text='Atualizar previa', height=30,
+            command=lambda: self._schedule_preview_update(immediate=True))
+        self.btn_refresh_prev.grid(row=5, column=0, padx=12, pady=(4, 10), sticky='ew')
 
         # Rodape: Progresso e Acoes
         footer_frame = ctk.CTkFrame(self, corner_radius=10, fg_color='#1E222A')
@@ -381,12 +416,17 @@ class VideoConverterApp(ctk.CTk):
                 break
             callback()
         if not self._closed:
-            self.after(30, self._drain_ui_events)
+            self._ui_timer = self.after(30, self._drain_ui_events)
 
     def _close(self):
         self._closed = True
         self.should_cancel = True
         self._pause_preview()
+        self._stop_preview_stream()
+        self._preview_request_id += 1
+        for timer in (self._ui_timer, self._overlay_timer, self._preview_debounce_timer):
+            if timer:
+                self.after_cancel(timer)
         self.withdraw()
         self._wait_close()
 
@@ -418,6 +458,7 @@ class VideoConverterApp(ctk.CTk):
             return
         self.btn_update.configure(state='disabled', text='Sincronizando...')
         self.btn_start.configure(state='disabled')
+        self.btn_clean_metadata.configure(state='disabled')
         self.lbl_sync_status.configure(text='Testando e sincronizando...', text_color='#64B5F6')
 
         def run_update():
@@ -435,6 +476,7 @@ class VideoConverterApp(ctk.CTk):
         ok, message = result
         self.btn_update.configure(state='normal', text='Sincronizar GitHub')
         self.btn_start.configure(state='normal')
+        self.btn_clean_metadata.configure(state='normal')
         self.lbl_sync_status.configure(text='App Sincronizado' if ok else 'Erro ao atualizar')
         if ok:
             messagebox.showinfo('Git Sync', message)
@@ -463,6 +505,7 @@ class VideoConverterApp(ctk.CTk):
 
     def _clear_videos(self):
         self._pause_preview()
+        self._stop_preview_stream()
         self._preview_request_id += 1
         self._preview_position = 0.0
         self._preview_duration = 0.0
@@ -470,7 +513,7 @@ class VideoConverterApp(ctk.CTk):
         self.preview_slider.set(0)
         self.preview_slider.configure(state='disabled')
         self.btn_play.configure(state='disabled')
-        self.lbl_preview_time.configure(text='0.00 / 0.00 s')
+        self.lbl_preview_time.configure(text='0.00 / 0.00 s | 0%')
         if self._preview_debounce_timer:
             self.after_cancel(self._preview_debounce_timer)
             self._preview_debounce_timer = None
@@ -478,7 +521,8 @@ class VideoConverterApp(ctk.CTk):
         self.input_files.clear()
         self.file_listbox.delete(0, tk.END)
         self.lbl_queue_count.configure(text='Nenhum video selecionado')
-        self.lbl_preview_img.configure(image='', text='Selecione um video para gerar o preview')
+        self._last_preview_image = None
+        self._preview_message('Selecione um video')
 
     def _select_output_dir(self):
         folder = filedialog.askdirectory(title='Escolha a Pasta de Saida')
@@ -503,6 +547,14 @@ class VideoConverterApp(ctk.CTk):
         return PRESET_RATIOS.get(self.combo_target_preset.get(), (1080, 1350))
 
     def _schedule_preview_update(self, immediate: bool = False):
+        self._update_percentages()
+        self._resume_after_load = False
+        self._pause_preview()
+        self._stop_preview_stream()
+        self._preview_request_id += 1
+        self._last_preview_image = None
+        self._preview_message('Preparando previa...')
+        self._update_format_label()
         sel = self.file_listbox.curselection()
         if sel and self.input_files:
             idx = sel[0]
@@ -542,7 +594,8 @@ class VideoConverterApp(ctk.CTk):
     def _get_options(self):
         return dict(mode=self.var_mode.get(), target_resolution=self._get_target_resolution(),
                     blur_strength=int(self.slider_blur.get()), bg_color=self.combo_color.get(),
-                    crf=int(self.slider_crf.get()), **self._get_edit_options())
+                    crf=int(self.slider_crf.get()), limpar_metadados=self.var_clean_metadata.get(),
+                    **self._get_edit_options())
 
     def _apply_preset_data(self, data):
         # Valida antes de alterar controles para evitar uma configuracao parcial.
@@ -571,6 +624,8 @@ class VideoConverterApp(ctk.CTk):
                 (self.var_speed, 'velocidade', 1), (self.var_cover_seconds, 'capa_segundos', 0.1),
                 (self.var_cover, 'capa_path', ''), (self.var_cover_fit, 'capa_ajuste', 'preencher')]:
             variable.set(data.get(key) or default)
+        self.var_clean_metadata.set(bool(data.get('limpar_metadados', True)))
+        self._update_percentages()
         self.var_mirror.set(bool(data.get('espelhar', False)))
         self._preview_position = 0.0
         self._schedule_preview_update(immediate=True)
@@ -607,124 +662,209 @@ class VideoConverterApp(ctk.CTk):
         except (ValueError, OSError) as error:
             messagebox.showerror('Configuracao', str(error))
 
+    def _update_percentages(self):
+        if not hasattr(self, 'lbl_blur_value'):
+            return
+        blur = int(self.slider_blur.get())
+        crf = int(self.slider_crf.get())
+        self.lbl_blur_value.configure(text=f'{blur / 80:.0%} ({blur})')
+        self.lbl_crf_value.configure(text=f'{(51-crf)/51:.0%} escala | CRF {crf}')
+        try:
+            self.lbl_sharpen_value.configure(text=f'{float(self.var_sharpen.get().replace(",", "."))/2:.0%}')
+            self.lbl_speed_value.configure(text=f'{float(self.var_speed.get().replace(",", ".")):.0%}')
+        except (ValueError, AttributeError):
+            pass
+
+    def _update_format_label(self):
+        w, h = self._get_target_resolution()
+        divisor = math.gcd(w, h)
+        self.lbl_preview_format.configure(text=f'{w//divisor}:{h//divisor} | {w} x {h} | sem audio')
+
+    def _preview_message(self, message):
+        self.preview_canvas.delete('all')
+        self.preview_canvas.create_text(max(1, self.preview_canvas.winfo_width())/2,
+            max(1, self.preview_canvas.winfo_height())/2, text=message, fill='white',
+            width=max(100, self.preview_canvas.winfo_width()-24), tags='message')
+        self.btn_play.configure(state='disabled')
+
+    def _draw_preview(self):
+        if self._last_preview_image is None:
+            self.preview_canvas.coords('message', self.preview_canvas.winfo_width()/2,
+                                       self.preview_canvas.winfo_height()/2)
+            return
+        image = self._last_preview_image
+        cw, ch = self.preview_canvas.winfo_width(), self.preview_canvas.winfo_height()
+        factor = min(max(1, cw-8)/image.width, max(1, ch-8)/image.height)
+        size = (max(1, round(image.width*factor)), max(1, round(image.height*factor)))
+        self._preview_photo = ImageTk.PhotoImage(image.resize(size, Image.Resampling.BILINEAR))
+        self.preview_canvas.delete('message')
+        if not self.preview_canvas.find_withtag('video'):
+            self.preview_canvas.create_image(cw/2, ch/2, image=self._preview_photo, tags='video')
+        else:
+            self.preview_canvas.coords('video', cw/2, ch/2)
+            self.preview_canvas.itemconfigure('video', image=self._preview_photo)
+
+    def _show_play_overlay(self):
+        self.btn_play.place(relx=0.5, rely=0.5, anchor='center')
+        if self._overlay_timer:
+            self.after_cancel(self._overlay_timer)
+        self._overlay_timer = self.after(900, self._hide_play_overlay)
+
+    def _hide_play_overlay(self):
+        self._overlay_timer = None
+        if self._playing:
+            self.btn_play.place_forget()
+
     def _seek_preview(self, value):
-        self._pause_preview()
         self._preview_position = float(value)
         self._schedule_preview_update()
 
+    def _stop_preview_stream(self):
+        if self._poll_timer:
+            self.after_cancel(self._poll_timer)
+            self._poll_timer = None
+        stream = self._preview_stream
+        self._preview_stream = None
+        self._pending_frame = None
+        if stream:
+            stream.close()
+
     def _pause_preview(self):
         self._playing = False
-        if self._play_timer:
-            self.after_cancel(self._play_timer)
-            self._play_timer = None
-        self.btn_play.configure(text='Reproduzir previa (sem audio)')
+        self.btn_play.configure(text='▶')
+        self._show_play_overlay()
 
     def _toggle_play(self):
         if self._playing:
             self._pause_preview()
             return
-        if self._preview_position >= max(0, self._preview_duration - 0.05):
+        if self._preview_stream is None or self.btn_play.cget('state') == 'disabled':
+            return
+        if self._preview_position >= self._preview_duration - 1/self._preview_stream.fps:
             self._preview_position = 0
+            self._schedule_preview_update(immediate=True)
+            self._resume_after_load = True
+            return
         self._playing = True
         self._play_origin = time.monotonic() - self._preview_position
-        self.btn_play.configure(text='Pausar previa')
-        self._play_tick()
-
-    def _play_tick(self):
-        self._play_timer = None
-        if not self._playing:
-            return
-        self._preview_position = min(self._preview_duration, time.monotonic() - self._play_origin)
-        if not self._preview_busy:
-            self._schedule_preview_update(immediate=True)
-        if self._preview_position >= self._preview_duration:
-            self._pause_preview()
-        else:
-            self._play_timer = self.after(200, self._play_tick)
+        self.btn_play.configure(text='Ⅱ')
+        self._show_play_overlay()
 
     def _dispatch_preview_thread(self):
         self._preview_debounce_timer = None
         if not self.selected_video_path or not os.path.exists(self.selected_video_path):
             return
-        self._preview_request_id += 1
         req_id = self._preview_request_id
         try:
             options = self._get_options()
             options.pop('crf')
+            options.pop('limpar_metadados')
         except ValueError:
-            self.lbl_preview_img.configure(text='Preencha os ajustes com numeros validos.')
+            self._preview_message('Preencha os ajustes com numeros validos.')
             return
         self._preview_busy = True
-        threading.Thread(target=self._generate_and_show_preview,
+        threading.Thread(target=self._prepare_preview,
             args=(req_id, self.selected_video_path, self._preview_position, options), daemon=True).start()
 
-    def _generate_and_show_preview(self, req_id, video_path, timestamp, options):
-        fd, temp_preview = tempfile.mkstemp(suffix='.png', prefix='preview_fnk_')
-        os.close(fd)
+    def _prepare_preview(self, req_id, video_path, timestamp, options):
         try:
             with self._preview_lock:
-                if req_id != self._preview_request_id:
+                if self._closed or req_id != self._preview_request_id:
                     return
                 cache_key = (video_path, os.path.getmtime(video_path))
                 metadata = self._metadata_cache.get(cache_key)
                 if metadata is None:
                     metadata = get_video_metadata(video_path)
-                    self._metadata_cache[cache_key] = metadata
-                _, duration, speed, cover, _ = get_edit_timeline(metadata,
-                    options['corte_inicio'], options['corte_fim'], options['velocidade'],
-                    options['capa_path'], options['capa_segundos'])
-                total = duration / speed + cover
-                timestamp = min(timestamp, total)
-                generate_preview_frame(video_path=video_path, output_image_path=temp_preview,
-                    timestamp_sec=timestamp, metadata=metadata, **options)
-                with Image.open(temp_preview) as raw_img:
-                    img = raw_img.copy()
-            self._post_ui(lambda: self._apply_preview_image(req_id, img, total, timestamp))
+                    self._metadata_cache = {cache_key: metadata}
+                stream = PreviewStream(video_path, metadata, timestamp, **options)
+                if self._closed or req_id != self._preview_request_id:
+                    stream.close()
+                    return
+                self._preview_stream = stream
+                if self._closed:
+                    stream.close()
+                    return
+            self._post_ui(lambda: self._accept_preview(req_id, stream))
         except Exception as error:
             self._post_ui(lambda message=str(error): self._apply_preview_error(req_id, message))
-        finally:
-            if os.path.exists(temp_preview):
-                os.remove(temp_preview)
-            self._post_ui(lambda: self._finish_preview(req_id))
 
-    def _finish_preview(self, req_id):
-        if req_id == self._preview_request_id:
-            self._preview_busy = False
-
-    def _apply_preview_image(self, req_id, image, duration, timestamp):
-        if req_id != self._preview_request_id:
+    def _accept_preview(self, req_id, stream):
+        if req_id != self._preview_request_id or self._closed:
+            stream.close()
             return
-        image.thumbnail((340, 440), Image.Resampling.LANCZOS)
-        ctk_img = ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
-        self.lbl_preview_img.configure(image=ctk_img, text='')
-        self.lbl_preview_img.image = ctk_img
-        self._preview_duration = duration
-        if not self._playing:
-            self._preview_position = timestamp
-        self.preview_slider.configure(to=max(0.001, duration), state='normal')
-        self.preview_slider.set(timestamp)
-        self.lbl_preview_time.configure(text=f'{timestamp:.2f} / {duration:.2f} s')
-        self.btn_play.configure(state='normal')
+        self._preview_duration = stream.duration
+        self._preview_position = stream.position
+        self.preview_slider.configure(to=max(0.001, stream.duration), state='normal')
+        self._poll_preview()
+
+    def _update_preview_time(self):
+        self.preview_slider.set(self._preview_position)
+        percent = self._preview_position / self._preview_duration if self._preview_duration else 0
+        self.lbl_preview_time.configure(text=f'{self._preview_position:.2f} / {self._preview_duration:.2f} s | {percent:.0%}')
+
+    def _poll_preview(self):
+        self._poll_timer = None
+        stream = self._preview_stream
+        if stream is None or self._closed:
+            return
+        desired = time.monotonic()-self._play_origin if self._playing else self._preview_position
+        frame_to_show = None
+        if self._playing or self._last_preview_image is None:
+            while True:
+                if self._pending_frame is None:
+                    try:
+                        self._pending_frame = stream.frames.get_nowait()
+                    except queue.Empty:
+                        break
+                timestamp, image = self._pending_frame
+                if self._last_preview_image is not None and timestamp > desired + 0.001:
+                    break
+                frame_to_show = self._pending_frame
+                self._pending_frame = None
+                if not self._playing:
+                    break
+        if frame_to_show:
+            self._preview_position, self._last_preview_image = frame_to_show
+            self._draw_preview()
+            self._update_preview_time()
+            self.btn_play.configure(state='normal')
+            self._preview_busy = False
+            if getattr(self, '_resume_after_load', False):
+                self._resume_after_load = False
+                self._toggle_play()
+        if stream.finished.is_set() and stream.frames.empty() and self._pending_frame is None:
+            if stream.error:
+                self._apply_preview_error(self._preview_request_id, stream.error)
+                return
+            if self._playing:
+                self._preview_position = stream.duration
+                self._update_preview_time()
+                self._pause_preview()
+        self._poll_timer = self.after(10, self._poll_preview)
 
     def _apply_preview_error(self, req_id, error_msg):
         if req_id == self._preview_request_id:
             self._pause_preview()
-            self.lbl_preview_img.configure(image='', text=f'Previa indisponivel\n{error_msg[:300]}')
-            self.btn_play.configure(state='disabled')
+            self._stop_preview_stream()
+            self._preview_busy = False
+            self._last_preview_image = None
+            self._preview_message(f'Previa indisponivel\n{error_msg[:300]}')
             self.preview_slider.configure(state='disabled')
 
-    def _start_conversion(self):
+    def _start_conversion(self, metadata_only=False):
         if not self.input_files:
             messagebox.showwarning('Aviso', 'Adicione ao menos um video a fila.')
             return
         if self.is_converting:
             return
         try:
-            options = self._get_options()
+            options = {'target_resolution': self._get_target_resolution()} if metadata_only else self._get_options()
         except ValueError:
             messagebox.showerror('Ajustes', 'Preencha os ajustes com numeros validos.')
             return
         self._pause_preview()
+        self._stop_preview_stream()
+        self.btn_play.configure(state='disabled')
         self.is_converting = True
         self.should_cancel = False
         self.btn_start.configure(state='disabled')
@@ -732,10 +872,11 @@ class VideoConverterApp(ctk.CTk):
         self.btn_clear.configure(state='disabled')
         self.btn_cancel.configure(state='normal')
         self.btn_update.configure(state='disabled')
+        self.btn_clean_metadata.configure(state='disabled')
         self.progress_bar.set(0)
         self.lbl_pct.configure(text='0%')
         self._conversion_thread = threading.Thread(target=self._conversion_worker,
-            args=(tuple(self.input_files), options, self.entry_out_dir.get().strip()), daemon=True)
+            args=(tuple(self.input_files), options, self.entry_out_dir.get().strip(), metadata_only), daemon=True)
         self._conversion_thread.start()
 
     def _cancel_conversion(self):
@@ -743,7 +884,7 @@ class VideoConverterApp(ctk.CTk):
             self.should_cancel = True
             self.lbl_status.configure(text='Cancelando processo...')
 
-    def _conversion_worker(self, files, options, custom_out_dir):
+    def _conversion_worker(self, files, options, custom_out_dir, metadata_only=False):
         successes, errors = 0, []
         w, h = options['target_resolution']
         for idx, file_path in enumerate(files, 1):
@@ -751,20 +892,25 @@ class VideoConverterApp(ctk.CTk):
                 break
             base_dir = custom_out_dir or os.path.dirname(file_path)
             name = Path(file_path).stem
-            out_file = Path(base_dir) / f'{name}_{w}x{h}.mp4'
+            suffix = '_metadados_limpos' if metadata_only else f'_{w}x{h}'
+            extension = Path(file_path).suffix if metadata_only else '.mp4'
+            out_file = Path(base_dir) / f'{name}{suffix}{extension}'
             number = 2
             while out_file.exists():
-                out_file = Path(base_dir) / f'{name}_{w}x{h}_{number}.mp4'
+                out_file = Path(base_dir) / f'{name}{suffix}_{number}{extension}'
                 number += 1
+            action = 'Limpando metadados' if metadata_only else 'Convertendo'
             self._post_ui(lambda idx=idx, path=file_path: self.lbl_status.configure(
-                text=f'Convertendo [{idx}/{len(files)}]: {os.path.basename(path)}'))
+                text=f'{action} [{idx}/{len(files)}]: {os.path.basename(path)}'))
 
             def progress(value, _text, idx=idx):
                 overall = ((idx - 1) + value) / len(files)
                 self._post_ui(lambda: self._show_progress(overall))
             try:
-                if convert_video(file_path, str(out_file), **options,
-                                 progress_callback=progress, cancel_check=lambda: self.should_cancel):
+                function = clean_metadata if metadata_only else convert_video
+                arguments = {} if metadata_only else options
+                if function(file_path, str(out_file), **arguments,
+                            progress_callback=progress, cancel_check=lambda: self.should_cancel):
                     successes += 1
             except Exception as error:
                 errors.append(f'{os.path.basename(file_path)}: {error}')
@@ -776,9 +922,11 @@ class VideoConverterApp(ctk.CTk):
 
     def _finish_conversion(self, successes, total, errors):
         self.is_converting = False
-        for button in (self.btn_start, self.btn_select, self.btn_clear, self.btn_update):
+        for button in (self.btn_start, self.btn_select, self.btn_clear, self.btn_update, self.btn_clean_metadata):
             button.configure(state='normal')
         self.btn_cancel.configure(state='disabled')
+        if self.selected_video_path:
+            self._schedule_preview_update(immediate=True)
         if self.should_cancel:
             self.lbl_status.configure(text=f'Cancelado. {successes} video(s) concluido(s).')
         else:

@@ -186,6 +186,7 @@ def convert_video(
     corte_fim: float = 0.0, espelhar: bool = False, velocidade: float = 1.0,
     capa_path: Optional[str] = None, capa_segundos: float = 0.1,
     capa_ajuste: str = 'preencher',
+    limpar_metadados: bool = True,
     progress_callback: Optional[Callable[[float, str], None]] = None,
     cancel_check: Optional[Callable[[], bool]] = None
 ) -> bool:
@@ -228,13 +229,46 @@ def convert_video(
                         f'adelay={round(cover_duration * 48000)}S:all=1,'
                         f'apad,atrim=end_sample={round(total * 48000)},asetpts=N/SR/TB[outa]')
             audio_args = ['-map', '[outa]', '-c:a', 'aac', '-b:a', '192k']
+    cmd += ['-filter_complex', filters, '-map', map_video, *audio_args,
+            '-c:v', 'libx264', '-preset', preset, '-crf', str(crf), '-pix_fmt', 'yuv420p']
+    if limpar_metadados:
+        cmd += metadata_removal_args(output_path)
+    else:
+        cmd += ['-map_metadata', '0']
+    cmd += ['-movflags', '+faststart']
+    return _run_output(cmd, output_path, total, progress_callback, cancel_check)
+
+
+def metadata_removal_args(output_path):
+    args = ['-map_metadata', '-1', '-map_metadata:s', '-1', '-map_chapters', '-1',
+            '-metadata', 'encoder=', '-metadata:s', 'encoder=', '-fflags', '+bitexact']
+    if os.path.splitext(output_path)[1].lower() in ('.mp4', '.mov'):
+        args += ['-write_tmcd', '0']
+    return args
+
+
+def clean_metadata(input_path, output_path, progress_callback=None, cancel_check=None):
+    """Remuxa video/audio sem recodificar; mantem orientacao e dados tecnicos."""
+    input_path, output_path = os.path.abspath(input_path), os.path.abspath(output_path)
+    if os.path.normcase(input_path) == os.path.normcase(output_path) or (
+            os.path.exists(output_path) and os.path.samefile(input_path, output_path)):
+        raise ValueError('Escolha uma saida diferente do video original.')
+    if os.path.splitext(input_path)[1].lower() != os.path.splitext(output_path)[1].lower():
+        raise ValueError('A limpeza sem conversao deve manter a extensao do original.')
+    metadata = get_video_metadata(input_path)
+    cmd = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-i', input_path,
+           '-map', '0:v:0', '-map', '0:a?', '-c', 'copy', *metadata_removal_args(output_path)]
+    if os.path.splitext(output_path)[1].lower() in ('.mp4', '.mov'):
+        cmd += ['-movflags', '+faststart']
+    return _run_output(cmd, output_path, max(0.001, metadata.duration), progress_callback, cancel_check)
+
+
+def _run_output(cmd, output_path, total, progress_callback, cancel_check):
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     fd, temp_output = tempfile.mkstemp(prefix='.fnk_', suffix=os.path.splitext(output_path)[1],
                                      dir=os.path.dirname(output_path))
     os.close(fd)
-    cmd += ['-filter_complex', filters, '-map', map_video, *audio_args,
-            '-c:v', 'libx264', '-preset', preset, '-crf', str(crf), '-pix_fmt', 'yuv420p',
-            '-movflags', '+faststart', '-progress', 'pipe:1', '-nostats', temp_output]
+    cmd = [*cmd, '-progress', 'pipe:1', '-nostats', temp_output]
     startupinfo = None
     if os.name == 'nt':
         startupinfo = subprocess.STARTUPINFO()
