@@ -15,6 +15,15 @@ class VideoMetadata:
     codec_name: str
     aspect_ratio: float
 
+# Presets de resolucoes e proporcoes padrão do mercado
+PRESET_RATIOS = {
+    "4:5 (Feed Instagram/FB)": (1080, 1350),
+    "9:16 (Stories/Reels/TikTok)": (1080, 1920),
+    "1:1 (Quadrado Feed)": (1080, 1080),
+    "16:9 (Horizontal/YouTube)": (1920, 1080),
+    "4:3 (Classico)": (1440, 1080)
+}
+
 def get_video_metadata(video_path: str) -> VideoMetadata:
     cmd = [
         'ffprobe',
@@ -24,7 +33,12 @@ def get_video_metadata(video_path: str) -> VideoMetadata:
         '-show_streams',
         video_path
     ]
-    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+    startupinfo = None
+    if os.name == 'nt':
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True, startupinfo=startupinfo)
     data = json.loads(res.stdout)
 
     video_stream = None
@@ -76,33 +90,56 @@ def get_video_metadata(video_path: str) -> VideoMetadata:
         aspect_ratio=ratio
     )
 
-def calculate_target_dimensions(width: int, height: int, target_w: int = 1080, target_h: int = 1350) -> tuple:
-    if target_w % 2 != 0:
-        target_w += 1
-    if target_h % 2 != 0:
-        target_h += 1
-    return target_w, target_h
+def ensure_even_dimensions(w: int, h: int) -> tuple[int, int]:
+    if w % 2 != 0:
+        w += 1
+    if h % 2 != 0:
+        h += 1
+    return w, h
 
-def build_filter_complex(mode: str, target_w: int, target_h: int, blur_strength: int = 35, bg_color: str = 'black') -> str:
+def build_filter_complex(
+    input_w: int,
+    input_h: int,
+    target_w: int,
+    target_h: int,
+    mode: str = 'blur',
+    blur_strength: int = 35,
+    bg_color: str = 'black'
+) -> str:
+    """
+    Filtro de composicao universal bidirecional (9:16 <-> 4:5 <-> 1:1 <-> 16:9).
+    Calcula dinamicamente a escala para garantir que o conteudo principal seja mantido
+    100% visivel e integro (fit seguro), seja o video mais alto ou mais largo que o alvo.
+    """
+    target_w, target_h = ensure_even_dimensions(target_w, target_h)
+
+    # Proporções
+    in_aspect = input_w / input_h if input_h > 0 else 1.0
+    out_aspect = target_w / target_h if target_h > 0 else 1.0
+
     if mode == 'blur':
+        # bg: redimensiona para cobrir todo o target_w/target_h (aspect ratio increase) e corta exatamente no centro
+        # fg: redimensiona para caber perfeitamente no quadro sem corte algum (aspect ratio decrease)
         filter_str = (
-            f'[0:v]split=2[fg_in][bg_in];'
-            f'[bg_in]scale={target_w}:{target_h}:force_original_aspect_ratio=increase,'
-            f'crop={target_w}:{target_h},'
-            f'boxblur={blur_strength}:5,'
-            f'eq=brightness=-0.08:saturation=1.1[bg];'
-            f'[fg_in]scale=-2:{target_h}[fg];'
-            f'[bg][fg]overlay=(W-w)/2:(H-h)/2[outv]'
+            f"[0:v]split=2[fg_in][bg_in];"
+            f"[bg_in]scale={target_w}:{target_h}:force_original_aspect_ratio=increase,"
+            f"crop={target_w}:{target_h},"
+            f"boxblur={blur_strength}:5,"
+            f"eq=brightness=-0.08:saturation=1.1[bg];"
+            f"[fg_in]scale={target_w}:{target_h}:force_original_aspect_ratio=decrease[fg];"
+            f"[bg][fg]overlay=(W-w)/2:(H-h)/2[outv]"
         )
     elif mode == 'pillarbox':
+        # Enquadra o video proporcionalmente e preenche bordas (laterais ou superior/inferior) com pad
         filter_str = (
-            f'[0:v]scale=-2:{target_h}[fg];'
-            f'[fg]pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:color={bg_color}[outv]'
+            f"[0:v]scale={target_w}:{target_h}:force_original_aspect_ratio=decrease[fg];"
+            f"[fg]pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:color={bg_color}[outv]"
         )
     elif mode == 'crop':
+        # Preenchimento total cortando suavemente as bordas excedentes sem barras
         filter_str = (
-            f'[0:v]scale={target_w}:-2,'
-            f'crop={target_w}:{target_h}:(iw-ow)/2:(ih-oh)/2[outv]'
+            f"[0:v]scale={target_w}:{target_h}:force_original_aspect_ratio=increase,"
+            f"crop={target_w}:{target_h}:(iw-ow)/2:(ih-oh)/2[outv]"
         )
     else:
         raise ValueError(f'Modo desconhecido: {mode}')
@@ -122,8 +159,16 @@ def convert_video(
     cancel_check: Optional[Callable[[], bool]] = None
 ) -> bool:
     metadata = get_video_metadata(input_path)
-    target_w, target_h = calculate_target_dimensions(*target_resolution)
-    filter_str = build_filter_complex(mode, target_w, target_h, blur_strength, bg_color)
+    target_w, target_h = ensure_even_dimensions(*target_resolution)
+    filter_str = build_filter_complex(
+        input_w=metadata.width,
+        input_h=metadata.height,
+        target_w=target_w,
+        target_h=target_h,
+        mode=mode,
+        blur_strength=blur_strength,
+        bg_color=bg_color
+    )
 
     cmd = [
         'ffmpeg',

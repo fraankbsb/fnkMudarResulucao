@@ -1,6 +1,6 @@
 import os
 import subprocess
-from .converter import build_filter_complex, calculate_target_dimensions
+from .converter import build_filter_complex, ensure_even_dimensions, get_video_metadata
 
 def generate_preview_frame(
     video_path: str,
@@ -11,8 +11,17 @@ def generate_preview_frame(
     blur_strength: int = 35,
     bg_color: str = 'black'
 ) -> str:
-    target_w, target_h = calculate_target_dimensions(*target_resolution)
-    filter_str = build_filter_complex(mode, target_w, target_h, blur_strength, bg_color)
+    metadata = get_video_metadata(video_path)
+    target_w, target_h = ensure_even_dimensions(*target_resolution)
+    filter_str = build_filter_complex(
+        input_w=metadata.width,
+        input_h=metadata.height,
+        target_w=target_w,
+        target_h=target_h,
+        mode=mode,
+        blur_strength=blur_strength,
+        bg_color=bg_color
+    )
 
     cmd = [
         'ffmpeg',

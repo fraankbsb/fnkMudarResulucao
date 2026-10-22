@@ -7,7 +7,7 @@ import customtkinter as ctk
 from PIL import Image
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from core.converter import convert_video, get_video_metadata, calculate_target_dimensions
+from core.converter import convert_video, get_video_metadata, ensure_even_dimensions, PRESET_RATIOS
 from core.preview import generate_preview_frame
 from core.updater import get_git_status, pull_updates, restart_app
 
@@ -17,9 +17,9 @@ ctk.set_default_color_theme('blue')
 class VideoConverterApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title('fnkMudarResolucao - Conversor 9:16 para 4:5')
-        self.geometry('980x760')
-        self.minsize(860, 680)
+        self.title('fnkMudarResolucao - Conversor Universal de Resolucao & Proporcao')
+        self.geometry('1060x820')
+        self.minsize(920, 720)
 
         self.input_files = []
         self.is_converting = False
@@ -30,22 +30,20 @@ class VideoConverterApp(ctk.CTk):
         threading.Thread(target=self._check_update_silent, daemon=True).start()
 
     def _build_ui(self):
-        # Grid Principal
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        # Header
+        # Header com Botao de Atualizar App
         header_frame = ctk.CTkFrame(self, corner_radius=10, fg_color='#1E222A')
         header_frame.grid(row=0, column=0, padx=15, pady=(15, 10), sticky='ew')
-        header_frame.grid_columnconfigure(1, weight=1)
+        header_frame.grid_columnconfigure(0, weight=1)
 
         header_top = ctk.CTkFrame(header_frame, fg_color='transparent')
-        header_top.grid(row=0, column=0, padx=20, pady=(12, 4), sticky='ew')
-        header_top.grid_columnconfigure(0, weight=1)
+        header_top.pack(fill='x', padx=20, pady=(12, 4))
 
         title_lbl = ctk.CTkLabel(
             header_top,
-            text='Conversor de Proporcao 9:16 -> 4:5',
+            text='Conversor Universal de Proporcao (4:5 / 9:16 / 1:1)',
             font=ctk.CTkFont(size=22, weight='bold'),
             text_color='#4CA1AF'
         )
@@ -73,11 +71,11 @@ class VideoConverterApp(ctk.CTk):
 
         sub_lbl = ctk.CTkLabel(
             header_frame,
-            text='Preserva 100% da originalidade do video vertical adaptando perfeitamente para feed 4:5 (Instagram/Facebook)',
+            text='Transforme qualquer video entre 9:16, 4:5, 1:1 e 16:9 preservando a originalidade sem distorcao.',
             font=ctk.CTkFont(size=13),
             text_color='#9EABB7'
         )
-        sub_lbl.grid(row=1, column=0, padx=20, pady=(0, 12), sticky='w')
+        sub_lbl.pack(anchor='w', padx=20, pady=(0, 12))
 
         # Conteudo em 2 colunas: Controles e Preview
         content_frame = ctk.CTkFrame(self, fg_color='transparent')
@@ -99,7 +97,7 @@ class VideoConverterApp(ctk.CTk):
         btn_row.pack(fill='x', padx=10, pady=10)
 
         self.btn_select = ctk.CTkButton(
-            btn_row, text='Selecionar Videos (9:16)', command=self._select_videos,
+            btn_row, text='Selecionar Videos', command=self._select_videos,
             font=ctk.CTkFont(size=14, weight='bold'), height=36
         )
         self.btn_select.pack(side='left', expand=True, fill='x', padx=(0, 5))
@@ -123,7 +121,32 @@ class VideoConverterApp(ctk.CTk):
         self.file_listbox.pack(fill='x', padx=10, pady=(0, 10))
         self.file_listbox.bind('<<ListboxSelect>>', self._on_file_selected)
 
-        # Modo de Conversao
+        # Proporcao de Destino Alvo
+        target_sec = ctk.CTkFrame(left_panel, corner_radius=8)
+        target_sec.pack(fill='x', padx=10, pady=8)
+
+        lbl_target = ctk.CTkLabel(target_sec, text='Proporcao / Resolucao de Destino:', font=ctk.CTkFont(weight='bold'))
+        lbl_target.pack(anchor='w', padx=10, pady=(10, 6))
+
+        row_preset = ctk.CTkFrame(target_sec, fg_color='transparent')
+        row_preset.pack(fill='x', padx=10, pady=(0, 10))
+
+        self.combo_target_preset = ctk.CTkComboBox(
+            row_preset,
+            values=[
+                '4:5 (Feed Instagram/FB - 1080x1350)',
+                '9:16 (Stories/Reels/TikTok - 1080x1920)',
+                '1:1 (Quadrado Feed - 1080x1080)',
+                '16:9 (Horizontal/YouTube - 1920x1080)',
+                '4:3 (Classico - 1440x1080)'
+            ],
+            width=320,
+            command=lambda _: self._update_preview_request()
+        )
+        self.combo_target_preset.set('4:5 (Feed Instagram/FB - 1080x1350)')
+        self.combo_target_preset.pack(side='left', fill='x', expand=True)
+
+        # Modo de Composicao
         mode_sec = ctk.CTkFrame(left_panel, corner_radius=8)
         mode_sec.pack(fill='x', padx=10, pady=8)
 
@@ -132,39 +155,29 @@ class VideoConverterApp(ctk.CTk):
 
         self.var_mode = ctk.StringVar(value='blur')
         self.radio_blur = ctk.CTkRadioButton(
-            mode_sec, text='Fundo Desfocado Dinamico (Recomendado - Video central 100% original + bordas blur)',
+            mode_sec, text='Fundo Desfocado Dinamico (Recomendado - Video 100% integro + fundo blur)',
             variable=self.var_mode, value='blur', command=self._update_preview_request
         )
         self.radio_blur.pack(anchor='w', padx=12, pady=4)
 
         self.radio_pillar = ctk.CTkRadioButton(
-            mode_sec, text='Barras Laterais Solidas (Pillarbox - Video original sem cortes)',
+            mode_sec, text='Barras Solidas (Pillarbox/Letterbox - Video original sem cortes)',
             variable=self.var_mode, value='pillarbox', command=self._update_preview_request
         )
         self.radio_pillar.pack(anchor='w', padx=12, pady=4)
 
         self.radio_crop = ctk.CTkRadioButton(
-            mode_sec, text='Preenchimento Total 4:5 (Corte proporcional do topo/base sem barras)',
+            mode_sec, text='Preenchimento Total (Corte proporcional ajustado sem barras)',
             variable=self.var_mode, value='crop', command=self._update_preview_request
         )
         self.radio_crop.pack(anchor='w', padx=12, pady=(4, 10))
 
-        # Ajustes Adicionais
+        # Parametros Adicionais
         adv_sec = ctk.CTkFrame(left_panel, corner_radius=8)
         adv_sec.pack(fill='x', padx=10, pady=8)
 
-        lbl_adv = ctk.CTkLabel(adv_sec, text='Parametros de Saida:', font=ctk.CTkFont(weight='bold'))
+        lbl_adv = ctk.CTkLabel(adv_sec, text='Ajustes Visuais:', font=ctk.CTkFont(weight='bold'))
         lbl_adv.pack(anchor='w', padx=10, pady=(10, 8))
-
-        row_res = ctk.CTkFrame(adv_sec, fg_color='transparent')
-        row_res.pack(fill='x', padx=10, pady=4)
-        ctk.CTkLabel(row_res, text='Resolucao Alvo (4:5):').pack(side='left')
-        self.combo_res = ctk.CTkComboBox(
-            row_res, values=['1080x1350 (Padrao Instagram HD)', '864x1080 (HD)', '1440x1800 (2K)'],
-            width=240, command=lambda _: self._update_preview_request()
-        )
-        self.combo_res.set('1080x1350 (Padrao Instagram HD)')
-        self.combo_res.pack(side='right')
 
         row_blur = ctk.CTkFrame(adv_sec, fg_color='transparent')
         row_blur.pack(fill='x', padx=10, pady=4)
@@ -175,7 +188,7 @@ class VideoConverterApp(ctk.CTk):
 
         row_color = ctk.CTkFrame(adv_sec, fg_color='transparent')
         row_color.pack(fill='x', padx=10, pady=4)
-        ctk.CTkLabel(row_color, text='Cor das Barras (Pillarbox):').pack(side='left')
+        ctk.CTkLabel(row_color, text='Cor das Barras (Modo Solido):').pack(side='left')
         self.combo_color = ctk.CTkComboBox(row_color, values=['black', 'white', 'gray', '#111827'], width=120)
         self.combo_color.set('black')
         self.combo_color.pack(side='right')
@@ -203,13 +216,13 @@ class VideoConverterApp(ctk.CTk):
         btn_browse_out = ctk.CTkButton(row_out, text='Procurar...', width=90, command=self._select_output_dir)
         btn_browse_out.pack(side='right')
 
-        # Coluna da Direita: Pre-Visualizacao 4:5
+        # Coluna da Direita: Pre-Visualizacao em Tempo Real
         right_panel = ctk.CTkFrame(content_frame, corner_radius=10)
         right_panel.grid(row=0, column=1, padx=(5, 0), pady=0, sticky='nsew')
         right_panel.grid_rowconfigure(1, weight=1)
         right_panel.grid_columnconfigure(0, weight=1)
 
-        lbl_prev_title = ctk.CTkLabel(right_panel, text='Pre-Visualizacao 4:5 em Tempo Real', font=ctk.CTkFont(weight='bold'))
+        lbl_prev_title = ctk.CTkLabel(right_panel, text='Pre-Visualizacao do Resultado', font=ctk.CTkFont(weight='bold'))
         lbl_prev_title.grid(row=0, column=0, padx=10, pady=(10, 6), sticky='ew')
 
         self.preview_canvas_frame = ctk.CTkFrame(right_panel, fg_color='#15171C', corner_radius=8)
@@ -247,7 +260,7 @@ class VideoConverterApp(ctk.CTk):
         action_row.pack(fill='x', padx=15, pady=(0, 12))
 
         self.btn_start = ctk.CTkButton(
-            action_row, text='INICIAR CONVERSAO 4:5', height=42,
+            action_row, text='INICIAR CONVERSAO DE PROPORCAO', height=42,
             font=ctk.CTkFont(size=15, weight='bold'), fg_color='#2E7D32', hover_color='#1B5E20',
             command=self._start_conversion
         )
@@ -305,7 +318,7 @@ class VideoConverterApp(ctk.CTk):
 
     def _select_videos(self):
         files = filedialog.askopenfilenames(
-            title='Selecione os Videos Verticais (9:16)',
+            title='Selecione os Videos',
             filetypes=[('Videos MP4/MOV/MKV/WEBM', '*.mp4 *.mov *.mkv *.webm'), ('Todos os arquivos', '*.*')]
         )
         if files:
@@ -334,13 +347,17 @@ class VideoConverterApp(ctk.CTk):
         self._update_preview_request()
 
     def _get_target_resolution(self):
-        val = self.combo_res.get()
-        if '1080x1350' in val:
+        val = self.combo_target_preset.get()
+        if '4:5' in val:
             return 1080, 1350
-        elif '864x1080' in val:
-            return 864, 1080
-        elif '1440x1800' in val:
-            return 1440, 1800
+        elif '9:16' in val:
+            return 1080, 1920
+        elif '1:1' in val:
+            return 1080, 1080
+        elif '16:9' in val:
+            return 1920, 1080
+        elif '4:3' in val:
+            return 1440, 1080
         return 1080, 1350
 
     def _update_preview_request(self):
@@ -354,7 +371,7 @@ class VideoConverterApp(ctk.CTk):
     def _generate_and_show_preview(self, video_path):
         try:
             self.lbl_preview_img.configure(text='Gerando previa...')
-            temp_preview = os.path.join(os.environ.get('TEMP', '.'), 'preview_fnk_4_5.jpg')
+            temp_preview = os.path.join(os.environ.get('TEMP', '.'), 'preview_fnk_universal.jpg')
             res = self._get_target_resolution()
             generate_preview_frame(
                 video_path=video_path,
@@ -365,10 +382,16 @@ class VideoConverterApp(ctk.CTk):
                 blur_strength=int(self.slider_blur.get()),
                 bg_color=self.combo_color.get()
             )
-            # Carrega a imagem e redimensiona para caber no frame de preview (proporcao 4:5)
             img = Image.open(temp_preview)
-            disp_w = 260
-            disp_h = int(disp_w * (5 / 4))
+            # Adapta tamanho da exibição proporcionalmente ao aspect ratio
+            aspect = res[0] / res[1] if res[1] > 0 else 0.8
+            if aspect <= 1.0:
+                disp_h = 320
+                disp_w = int(disp_h * aspect)
+            else:
+                disp_w = 300
+                disp_h = int(disp_w / aspect)
+
             ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(disp_w, disp_h))
             self.lbl_preview_img.configure(image=ctk_img, text='')
         except Exception as e:
@@ -404,6 +427,7 @@ class VideoConverterApp(ctk.CTk):
         color_val = self.combo_color.get()
         crf_val = int(self.slider_crf.get())
 
+        preset_str = f'{res[0]}x{res[1]}'
         custom_out_dir = self.entry_out_dir.get().strip()
         sucessos = 0
 
@@ -414,7 +438,7 @@ class VideoConverterApp(ctk.CTk):
             base_dir = custom_out_dir if custom_out_dir else os.path.dirname(file_path)
             os.makedirs(base_dir, exist_ok=True)
             fname, ext = os.path.splitext(os.path.basename(file_path))
-            out_file = os.path.join(base_dir, f'{fname}_4x5{ext}')
+            out_file = os.path.join(base_dir, f'{fname}_{preset_str}{ext}')
 
             self.lbl_status.configure(text=f'Convertendo [{idx}/{total_files}]: {os.path.basename(file_path)}')
 
@@ -452,8 +476,8 @@ class VideoConverterApp(ctk.CTk):
         else:
             self.progress_bar.set(1.0)
             self.lbl_pct.configure(text='100%')
-            self.lbl_status.configure(text=f'Concluido! {sucessos} de {total_files} videos convertidos para 4:5.')
-            messagebox.showinfo('Sucesso', f'Processamento concluido!\n{sucessos} video(s) convertidos em formato 4:5.')
+            self.lbl_status.configure(text=f'Concluido! {sucessos} de {total_files} videos convertidos para {preset_str}.')
+            messagebox.showinfo('Sucesso', f'Processamento concluido!\n{sucessos} video(s) convertidos em formato {preset_str}.')
 
     def _open_output_folder(self):
         target_dir = self.entry_out_dir.get().strip()
