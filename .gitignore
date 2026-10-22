@@ -1,0 +1,14 @@
+# Ignorar cache do Python
+__pycache__/
+*.py[cod]
+*.class
+
+# Arquivos de teste e temporarios
+tests/test_*.mp4
+tests/*.mp4
+*.tmp
+*.log
+preview_*.jpg
+dist/
+build/
+*.spec
