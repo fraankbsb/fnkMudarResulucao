@@ -35,6 +35,8 @@ def main():
     parser.add_argument('--capa-ajuste', choices=['preencher', 'inteira', 'esticar'], default='preencher')
     parser.add_argument('--manter-metadados', action='store_true', help='Preservar metadados de origem na conversao')
     parser.add_argument('--somente-limpar-metadados', action='store_true', help='Limpar a fila sem recodificar video/audio')
+    parser.add_argument('--identidade-unica', action='store_true', help='Novo UUID por arquivo, sem inventar dados do aparelho')
+    parser.add_argument('--perfil-celular', action='store_true', help='MP4 H.264 com audio AAC')
     args = parser.parse_args()
     if args.somente_limpar_metadados and args.manter_metadados:
         parser.error('Escolha limpar ou manter os metadados.')
@@ -43,7 +45,8 @@ def main():
     edits = dict(sharpen_strength=args.sharpen_strength, corte_inicio=args.corte_inicio,
                  corte_fim=args.corte_fim, velocidade=args.velocidade, espelhar=args.espelhar,
                  capa_path=args.capa, capa_segundos=args.capa_segundos, capa_ajuste=args.capa_ajuste,
-                 limpar_metadados=not args.manter_metadados)
+                 limpar_metadados=not args.manter_metadados, identidade_unica=args.identidade_unica,
+                 perfil_celular=args.perfil_celular)
 
     converter = clean_metadata if args.somente_limpar_metadados else convert_video
 
@@ -83,7 +86,7 @@ def main():
                     filled = int(bar_len * p)
                     bar = '=' * filled + '-' * (bar_len - filled)
                     print(f'\rProgresso: [{bar}] {text}', end='', flush=True)
-                options = {} if args.somente_limpar_metadados else dict(mode=args.mode,
+                options = {'identidade_unica': args.identidade_unica} if args.somente_limpar_metadados else dict(mode=args.mode,
                     target_resolution=target_res, blur_strength=args.blur_strength, bg_color=args.bg_color,
                     crf=args.crf, preset=args.preset, **edits)
                 converter(f, dest, progress_callback=progress, **options)
@@ -118,7 +121,7 @@ def main():
 
         start = time.time()
         try:
-            options = {} if args.somente_limpar_metadados else dict(mode=args.mode,
+            options = {'identidade_unica': args.identidade_unica} if args.somente_limpar_metadados else dict(mode=args.mode,
                 target_resolution=target_res, blur_strength=args.blur_strength, bg_color=args.bg_color,
                 crf=args.crf, preset=args.preset, **edits)
             converter(input_path, out_file, progress_callback=progress, **options)

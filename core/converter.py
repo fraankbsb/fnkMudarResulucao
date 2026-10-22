@@ -1,4 +1,5 @@
 import json
+import uuid
 import math
 import os
 import queue
@@ -187,6 +188,8 @@ def convert_video(
     capa_path: Optional[str] = None, capa_segundos: float = 0.1,
     capa_ajuste: str = 'preencher',
     limpar_metadados: bool = True,
+    identidade_unica: bool = False,
+    perfil_celular: bool = False,
     progress_callback: Optional[Callable[[float, str], None]] = None,
     cancel_check: Optional[Callable[[], bool]] = None
 ) -> bool:
@@ -196,6 +199,8 @@ def convert_video(
         raise ValueError('Escolha uma saida diferente do video original.')
     if os.path.splitext(output_path)[1].lower() not in ('.mp4', '.mov', '.mkv'):
         raise ValueError('Use uma saida MP4, MOV ou MKV para a codificacao H.264.')
+    if perfil_celular and os.path.splitext(output_path)[1].lower() != '.mp4':
+        raise ValueError('O perfil para celular usa saida MP4.')
     _finite(crf, 'qualidade CRF', 0, 51)
     metadata = get_video_metadata(input_path)
     w, h = ensure_even_dimensions(*target_resolution)
@@ -221,7 +226,7 @@ def convert_video(
     audio_args = []
     if metadata.has_audio:
         # Copia sem perdas quando a linha de tempo nao foi editada.
-        copy_audio = speed == 1 and not capa_path and start == 0 and float(corte_fim) == 0
+        copy_audio = speed == 1 and not capa_path and start == 0 and float(corte_fim) == 0 and not perfil_celular
         if copy_audio:
             audio_args = ['-map', '0:a:0', '-c:a', 'copy']
         else:
@@ -235,8 +240,18 @@ def convert_video(
         cmd += metadata_removal_args(output_path)
     else:
         cmd += ['-map_metadata', '0']
-    cmd += ['-movflags', '+faststart']
+    if perfil_celular:
+        cmd += ['-brand', 'mp42']
+    cmd += identity_args(output_path, identidade_unica)
+    cmd += ['-movflags', '+faststart+use_metadata_tags' if identidade_unica else '+faststart']
     return _run_output(cmd, output_path, total, progress_callback, cancel_check)
+
+
+def identity_args(output_path, enabled):
+    # UUID identifica esta copia, sem inventar fabricante, modelo, GPS ou serial.
+    if not enabled:
+        return []
+    return ['-metadata', f'content_identifier={uuid.uuid4()}']
 
 
 def metadata_removal_args(output_path):
@@ -247,7 +262,7 @@ def metadata_removal_args(output_path):
     return args
 
 
-def clean_metadata(input_path, output_path, progress_callback=None, cancel_check=None):
+def clean_metadata(input_path, output_path, progress_callback=None, cancel_check=None, identidade_unica=False):
     """Remuxa video/audio sem recodificar; mantem orientacao e dados tecnicos."""
     input_path, output_path = os.path.abspath(input_path), os.path.abspath(output_path)
     if os.path.normcase(input_path) == os.path.normcase(output_path) or (
@@ -257,9 +272,10 @@ def clean_metadata(input_path, output_path, progress_callback=None, cancel_check
         raise ValueError('A limpeza sem conversao deve manter a extensao do original.')
     metadata = get_video_metadata(input_path)
     cmd = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-i', input_path,
-           '-map', '0:v:0', '-map', '0:a?', '-c', 'copy', *metadata_removal_args(output_path)]
+           '-map', '0:v:0', '-map', '0:a?', '-c', 'copy', *metadata_removal_args(output_path),
+           *identity_args(output_path, identidade_unica)]
     if os.path.splitext(output_path)[1].lower() in ('.mp4', '.mov'):
-        cmd += ['-movflags', '+faststart']
+        cmd += ['-movflags', '+faststart+use_metadata_tags' if identidade_unica else '+faststart']
     return _run_output(cmd, output_path, max(0.001, metadata.duration), progress_callback, cancel_check)
 
 

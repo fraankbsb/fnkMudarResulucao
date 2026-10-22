@@ -14,6 +14,7 @@ from PIL import Image, ImageTk
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from core.converter import convert_video, get_video_metadata, PRESET_RATIOS, get_edit_timeline, clean_metadata
 from core.playback import PreviewStream
+from core.audio_preview import AudioPreview
 from core.updater import get_git_status, restart_app
 
 ctk.set_appearance_mode('dark')
@@ -23,7 +24,7 @@ class VideoConverterApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title('fnkMudarResolucao - Conversor Universal de Resolucao & Proporcao')
-        self.geometry('1060x820')
+        self.geometry(f'{min(1440, self.winfo_screenwidth()-70)}x{min(960, self.winfo_screenheight()-90)}')
         self.minsize(920, 720)
 
         self.input_files = []
@@ -43,10 +44,13 @@ class VideoConverterApp(ctk.CTk):
         self._last_preview_image = None
         self._pending_frame = None
         self._playing = False
+        self._can_play = False
+        self._preview_expanded = False
         self._preview_duration = 0.0
         self._preview_position = 0.0
         self._closed = False
         self._build_ui()
+        self.bind('<Escape>', lambda _: self._toggle_preview_size() if self._preview_expanded else None)
         self._ui_timer = self.after(30, self._drain_ui_events)
         self.protocol('WM_DELETE_WINDOW', self._close)
         threading.Thread(target=self._check_update_silent, daemon=True).start()
@@ -57,7 +61,8 @@ class VideoConverterApp(ctk.CTk):
 
         # Header com Botao de Atualizar App
         header_frame = ctk.CTkFrame(self, corner_radius=10, fg_color='#1E222A')
-        header_frame.grid(row=0, column=0, padx=15, pady=(15, 10), sticky='ew')
+        header_frame.grid(row=0, column=0, padx=15, pady=(10, 5), sticky='ew')
+        self._header_panel = header_frame
         header_frame.grid_columnconfigure(0, weight=1)
 
         header_top = ctk.CTkFrame(header_frame, fg_color='transparent')
@@ -65,8 +70,8 @@ class VideoConverterApp(ctk.CTk):
 
         title_lbl = ctk.CTkLabel(
             header_top,
-            text='Conversor Universal de Proporcao (4:5 / 9:16 / 1:1)',
-            font=ctk.CTkFont(size=22, weight='bold'),
+            text='fnkMudarResolucao',
+            font=ctk.CTkFont(size=18, weight='bold'),
             text_color='#4CA1AF'
         )
         title_lbl.pack(side='left')
@@ -97,19 +102,21 @@ class VideoConverterApp(ctk.CTk):
             font=ctk.CTkFont(size=13),
             text_color='#9EABB7'
         )
-        sub_lbl.pack(anchor='w', padx=20, pady=(0, 12))
+        sub_lbl.pack(anchor='w', padx=20, pady=(0, 5))
 
         # Conteudo em 2 colunas: Controles e Preview
         content_frame = ctk.CTkFrame(self, fg_color='transparent')
         content_frame.grid(row=1, column=0, padx=15, pady=5, sticky='nsew')
-        content_frame.grid_columnconfigure(0, weight=3)
+        content_frame.grid_columnconfigure(0, weight=1)
         content_frame.grid_columnconfigure(1, weight=2)
+        self._content_panel = content_frame
         content_frame.grid_rowconfigure(0, weight=1)
 
         # Coluna da esquerda: Configuracoes e Arquivos
         left_panel = ctk.CTkScrollableFrame(content_frame, label_text='Configuracoes e Fila de Videos')
         left_panel.grid(row=0, column=0, padx=(0, 10), pady=0, sticky='nsew')
         left_panel.grid_columnconfigure(0, weight=1)
+        self._settings_panel = left_panel
 
         # Selecao de Arquivos
         file_sec = ctk.CTkFrame(left_panel, corner_radius=8)
@@ -278,12 +285,20 @@ class VideoConverterApp(ctk.CTk):
 
         metadata_sec = ctk.CTkFrame(left_panel, corner_radius=8)
         metadata_sec.pack(fill='x', padx=10, pady=8)
-        ctk.CTkLabel(metadata_sec, text='Limpeza de Metadados', font=ctk.CTkFont(weight='bold')).pack(anchor='w', padx=10, pady=8)
+        ctk.CTkLabel(metadata_sec, text='Limpeza de Metadados e Identidade', font=ctk.CTkFont(weight='bold')).pack(anchor='w', padx=10, pady=8)
         self.var_clean_metadata = tk.BooleanVar(value=True)
         ctk.CTkCheckBox(metadata_sec, text='Remover metadados pessoais na conversao',
                        variable=self.var_clean_metadata).pack(anchor='w', padx=10, pady=4)
         ctk.CTkLabel(metadata_sec, text='Remove autor, titulo, comentarios, datas e localizacao.\nMantem os dados tecnicos necessarios para reproduzir o video.',
                     justify='left', wraplength=450, font=ctk.CTkFont(size=11)).pack(anchor='w', padx=10, pady=4)
+        self.var_unique_identity = tk.BooleanVar(value=True)
+        self.var_mobile_profile = tk.BooleanVar(value=True)
+        ctk.CTkCheckBox(metadata_sec, text='Gerar identificador unico por video (UUID)',
+            variable=self.var_unique_identity).pack(anchor='w', padx=10, pady=4)
+        ctk.CTkCheckBox(metadata_sec, text='Formato para celular: MP4 / H.264 / AAC',
+            variable=self.var_mobile_profile).pack(anchor='w', padx=10, pady=4)
+        ctk.CTkLabel(metadata_sec, text='Limpeza local inspirada no padrao do Metadata2Go.\nRemove dados pessoais; conserva imagem e som.\nO UUID identifica a copia, sem inventar dados de aparelho.',
+            justify='left', wraplength=450, font=ctk.CTkFont(size=11)).pack(anchor='w', padx=10, pady=4)
         self.btn_clean_metadata = ctk.CTkButton(metadata_sec,
             text='Limpar metadados da fila (sem converter)',
             command=lambda: self._start_conversion(metadata_only=True))
@@ -328,6 +343,7 @@ class VideoConverterApp(ctk.CTk):
         # Coluna da Direita: Pre-Visualizacao em Tempo Real
         right_panel = ctk.CTkFrame(content_frame, corner_radius=10)
         right_panel.grid(row=0, column=1, padx=(5, 0), pady=0, sticky='nsew')
+        self._preview_panel = right_panel
         right_panel.grid_rowconfigure(1, weight=1)
         right_panel.grid_columnconfigure(0, weight=1)
 
@@ -343,14 +359,14 @@ class VideoConverterApp(ctk.CTk):
             highlightthickness=0, width=280, height=300)
         self.preview_canvas.grid(row=0, column=0, sticky='nsew', padx=4, pady=4)
         self.preview_canvas.bind('<Configure>', lambda _: self._draw_preview())
-        self.preview_canvas.bind('<Button-1>', lambda _: self._toggle_play())
+        self.preview_canvas.bind('<Button-1>', self._click_preview)
+        self.preview_canvas.bind('<space>', lambda _: self._toggle_play())
+        self.preview_canvas.bind('<Leave>', lambda _: self._hide_play_overlay())
         self.preview_canvas.bind('<Motion>', lambda _: self._show_play_overlay())
         self.preview_canvas.create_text(140, 150, text='Selecione um video', fill='white', tags='message')
-        self.btn_play = ctk.CTkButton(self.preview_canvas_frame, text='▶',
-            width=58, height=58, corner_radius=29, font=ctk.CTkFont(size=25),
-            state='disabled', command=self._toggle_play)
-        self.btn_play.place(relx=0.5, rely=0.5, anchor='center')
-        self.lbl_preview_format = ctk.CTkLabel(right_panel, text='4:5 | 1080 x 1350 | sem audio')
+        # Icone desenhado no canvas: sem quadrado, circulo ou fundo cobrindo o video.
+        self._play_glyph = '▶'
+        self.lbl_preview_format = ctk.CTkLabel(right_panel, text='4:5 | 1080 x 1350 | audio ao reproduzir')
         self.lbl_preview_format.grid(row=2, column=0, padx=12, pady=2, sticky='ew')
         self.preview_slider = ctk.CTkSlider(right_panel, from_=0, to=1,
             command=self._seek_preview, state='disabled')
@@ -358,14 +374,23 @@ class VideoConverterApp(ctk.CTk):
         self.preview_slider.grid(row=3, column=0, padx=12, pady=4, sticky='ew')
         self.lbl_preview_time = ctk.CTkLabel(right_panel, text='0.00 / 0.00 s | 0%')
         self.lbl_preview_time.grid(row=4, column=0, padx=12, pady=2)
-        self.btn_refresh_prev = ctk.CTkButton(right_panel, text='Atualizar previa', height=30,
-            command=lambda: self._schedule_preview_update(immediate=True))
-        self.btn_refresh_prev.grid(row=5, column=0, padx=12, pady=(4, 10), sticky='ew')
+        preview_controls = ctk.CTkFrame(right_panel, fg_color='transparent')
+        preview_controls.grid(row=5, column=0, padx=12, pady=(4, 8), sticky='ew')
+        self.btn_refresh_prev = ctk.CTkButton(preview_controls, text='Atualizar previa', width=130,
+            height=28, command=lambda: self._schedule_preview_update(immediate=True))
+        self.btn_refresh_prev.pack(side='left', padx=(0, 5))
+        self.btn_expand_preview = ctk.CTkButton(preview_controls, text='Ampliar previa', width=135,
+            height=28, command=self._toggle_preview_size)
+        self.btn_expand_preview.pack(side='left', padx=5)
+        self.var_muted = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(preview_controls, text='Sem som', variable=self.var_muted,
+            width=95, command=self._set_preview_muted).pack(side='right', padx=5)
 
         # Rodape: Progresso e Acoes
         footer_frame = ctk.CTkFrame(self, corner_radius=10, fg_color='#1E222A')
         footer_frame.grid(row=2, column=0, padx=15, pady=(10, 15), sticky='ew')
         footer_frame.grid_columnconfigure(0, weight=1)
+        self._footer_panel = footer_frame
 
         prog_row = ctk.CTkFrame(footer_frame, fg_color='transparent')
         prog_row.pack(fill='x', padx=15, pady=(10, 4))
@@ -512,7 +537,7 @@ class VideoConverterApp(ctk.CTk):
         self._preview_busy = False
         self.preview_slider.set(0)
         self.preview_slider.configure(state='disabled')
-        self.btn_play.configure(state='disabled')
+        self._set_play_enabled(False)
         self.lbl_preview_time.configure(text='0.00 / 0.00 s | 0%')
         if self._preview_debounce_timer:
             self.after_cancel(self._preview_debounce_timer)
@@ -595,6 +620,7 @@ class VideoConverterApp(ctk.CTk):
         return dict(mode=self.var_mode.get(), target_resolution=self._get_target_resolution(),
                     blur_strength=int(self.slider_blur.get()), bg_color=self.combo_color.get(),
                     crf=int(self.slider_crf.get()), limpar_metadados=self.var_clean_metadata.get(),
+                    identidade_unica=self.var_unique_identity.get(), perfil_celular=self.var_mobile_profile.get(),
                     **self._get_edit_options())
 
     def _apply_preset_data(self, data):
@@ -625,6 +651,8 @@ class VideoConverterApp(ctk.CTk):
                 (self.var_cover, 'capa_path', ''), (self.var_cover_fit, 'capa_ajuste', 'preencher')]:
             variable.set(data.get(key) or default)
         self.var_clean_metadata.set(bool(data.get('limpar_metadados', True)))
+        self.var_unique_identity.set(bool(data.get('identidade_unica', True)))
+        self.var_mobile_profile.set(bool(data.get('perfil_celular', True)))
         self._update_percentages()
         self.var_mirror.set(bool(data.get('espelhar', False)))
         self._preview_position = 0.0
@@ -678,14 +706,24 @@ class VideoConverterApp(ctk.CTk):
     def _update_format_label(self):
         w, h = self._get_target_resolution()
         divisor = math.gcd(w, h)
-        self.lbl_preview_format.configure(text=f'{w//divisor}:{h//divisor} | {w} x {h} | sem audio')
+        stream = self._preview_stream
+        audio = getattr(stream, 'audio', None)
+        if audio and audio.error:
+            sound = 'audio indisponivel'
+        elif audio:
+            sound = 'som desativado' if self.var_muted.get() else 'com audio'
+        elif stream is not None:
+            sound = 'video sem faixa de audio'
+        else:
+            sound = 'audio ao reproduzir'
+        self.lbl_preview_format.configure(text=f'{w//divisor}:{h//divisor} | {w} x {h} | {sound}')
 
     def _preview_message(self, message):
         self.preview_canvas.delete('all')
         self.preview_canvas.create_text(max(1, self.preview_canvas.winfo_width())/2,
             max(1, self.preview_canvas.winfo_height())/2, text=message, fill='white',
             width=max(100, self.preview_canvas.winfo_width()-24), tags='message')
-        self.btn_play.configure(state='disabled')
+        self._set_play_enabled(False)
 
     def _draw_preview(self):
         if self._last_preview_image is None:
@@ -703,17 +741,55 @@ class VideoConverterApp(ctk.CTk):
         else:
             self.preview_canvas.coords('video', cw/2, ch/2)
             self.preview_canvas.itemconfigure('video', image=self._preview_photo)
+        self.preview_canvas.tag_raise('play_overlay')
+
+    def _set_play_enabled(self, enabled):
+        self._can_play = enabled
+        if not enabled:
+            self.preview_canvas.delete('play_overlay')
+
+    def _click_preview(self, _event=None):
+        self.preview_canvas.focus_set()
+        self._toggle_play()
 
     def _show_play_overlay(self):
-        self.btn_play.place(relx=0.5, rely=0.5, anchor='center')
+        if not self._can_play:
+            return
+        self.preview_canvas.delete('play_overlay')
+        x, y = self.preview_canvas.winfo_width()/2, self.preview_canvas.winfo_height()/2
+        self.preview_canvas.create_text(x+1, y+1, text=self._play_glyph, fill='#202020',
+            font=('Segoe UI Symbol', 21), tags='play_overlay')
+        self.preview_canvas.create_text(x, y, text=self._play_glyph, fill='white',
+            font=('Segoe UI Symbol', 21), tags='play_overlay')
         if self._overlay_timer:
             self.after_cancel(self._overlay_timer)
-        self._overlay_timer = self.after(900, self._hide_play_overlay)
+        self._overlay_timer = self.after(600, self._hide_play_overlay)
 
     def _hide_play_overlay(self):
         self._overlay_timer = None
-        if self._playing:
-            self.btn_play.place_forget()
+        self.preview_canvas.delete('play_overlay')
+
+    def _toggle_preview_size(self):
+        self._preview_expanded = not self._preview_expanded
+        if self._preview_expanded:
+            self._settings_panel.grid_remove()
+            self._header_panel.grid_remove()
+            self._footer_panel.grid_remove()
+            self._preview_panel.grid_configure(column=0, columnspan=2)
+            self.btn_expand_preview.configure(text='Restaurar painel')
+        else:
+            self._settings_panel.grid()
+            self._header_panel.grid()
+            self._footer_panel.grid()
+            self._preview_panel.grid_configure(column=1, columnspan=1)
+            self.btn_expand_preview.configure(text='Ampliar previa')
+        self.after_idle(self._draw_preview)
+
+    def _set_preview_muted(self):
+        audio = getattr(self._preview_stream, 'audio', None)
+        if audio:
+            audio.muted = self.var_muted.get()
+        self._update_format_label()
 
     def _seek_preview(self, value):
         self._preview_position = float(value)
@@ -727,18 +803,24 @@ class VideoConverterApp(ctk.CTk):
         self._preview_stream = None
         self._pending_frame = None
         if stream:
+            audio = getattr(stream, 'audio', None)
+            if audio:
+                audio.close()
             stream.close()
 
     def _pause_preview(self):
         self._playing = False
-        self.btn_play.configure(text='▶')
+        audio = getattr(self._preview_stream, 'audio', None)
+        if audio:
+            audio.pause()
+        self._play_glyph = '▶'
         self._show_play_overlay()
 
     def _toggle_play(self):
         if self._playing:
             self._pause_preview()
             return
-        if self._preview_stream is None or self.btn_play.cget('state') == 'disabled':
+        if self._preview_stream is None or not self._can_play:
             return
         if self._preview_position >= self._preview_duration - 1/self._preview_stream.fps:
             self._preview_position = 0
@@ -747,7 +829,10 @@ class VideoConverterApp(ctk.CTk):
             return
         self._playing = True
         self._play_origin = time.monotonic() - self._preview_position
-        self.btn_play.configure(text='Ⅱ')
+        audio = getattr(self._preview_stream, 'audio', None)
+        if audio and not audio.error:
+            audio.resume()
+        self._play_glyph = 'Ⅱ'
         self._show_play_overlay()
 
     def _dispatch_preview_thread(self):
@@ -759,14 +844,16 @@ class VideoConverterApp(ctk.CTk):
             options = self._get_options()
             options.pop('crf')
             options.pop('limpar_metadados')
+            options.pop('identidade_unica')
+            options.pop('perfil_celular')
         except ValueError:
             self._preview_message('Preencha os ajustes com numeros validos.')
             return
         self._preview_busy = True
         threading.Thread(target=self._prepare_preview,
-            args=(req_id, self.selected_video_path, self._preview_position, options), daemon=True).start()
+            args=(req_id, self.selected_video_path, self._preview_position, options, self.var_muted.get()), daemon=True).start()
 
-    def _prepare_preview(self, req_id, video_path, timestamp, options):
+    def _prepare_preview(self, req_id, video_path, timestamp, options, muted=False):
         try:
             with self._preview_lock:
                 if self._closed or req_id != self._preview_request_id:
@@ -777,11 +864,14 @@ class VideoConverterApp(ctk.CTk):
                     metadata = get_video_metadata(video_path)
                     self._metadata_cache = {cache_key: metadata}
                 stream = PreviewStream(video_path, metadata, timestamp, **options)
+                stream.audio = AudioPreview(video_path, metadata, stream.position, muted=muted, **options) if metadata.has_audio else None
                 if self._closed or req_id != self._preview_request_id:
+                    if stream.audio: stream.audio.close()
                     stream.close()
                     return
                 self._preview_stream = stream
                 if self._closed:
+                    if stream.audio: stream.audio.close()
                     stream.close()
                     return
             self._post_ui(lambda: self._accept_preview(req_id, stream))
@@ -790,9 +880,12 @@ class VideoConverterApp(ctk.CTk):
 
     def _accept_preview(self, req_id, stream):
         if req_id != self._preview_request_id or self._closed:
+            if stream.audio: stream.audio.close()
             stream.close()
             return
         self._preview_duration = stream.duration
+        self._audio_failed = False
+        self._set_preview_muted()
         self._preview_position = stream.position
         self.preview_slider.configure(to=max(0.001, stream.duration), state='normal')
         self._poll_preview()
@@ -807,7 +900,16 @@ class VideoConverterApp(ctk.CTk):
         stream = self._preview_stream
         if stream is None or self._closed:
             return
+        audio = getattr(stream, 'audio', None)
+        if audio and audio.error and not self._audio_failed:
+            self._audio_failed = True
+            audio.close()
+            self._play_origin = time.monotonic()-self._preview_position
+            self._update_format_label()
+            self.lbl_status.configure(text=f'Som indisponivel: {audio.error[:180]}')
         desired = time.monotonic()-self._play_origin if self._playing else self._preview_position
+        if self._playing and audio and not audio.error:
+            desired = audio.position if audio.ready.is_set() else self._preview_position
         frame_to_show = None
         if self._playing or self._last_preview_image is None:
             while True:
@@ -827,7 +929,7 @@ class VideoConverterApp(ctk.CTk):
             self._preview_position, self._last_preview_image = frame_to_show
             self._draw_preview()
             self._update_preview_time()
-            self.btn_play.configure(state='normal')
+            self._set_play_enabled(True)
             self._preview_busy = False
             if getattr(self, '_resume_after_load', False):
                 self._resume_after_load = False
@@ -836,7 +938,7 @@ class VideoConverterApp(ctk.CTk):
             if stream.error:
                 self._apply_preview_error(self._preview_request_id, stream.error)
                 return
-            if self._playing:
+            if self._playing and (not audio or audio.error or audio.position >= stream.duration-0.015):
                 self._preview_position = stream.duration
                 self._update_preview_time()
                 self._pause_preview()
@@ -858,13 +960,13 @@ class VideoConverterApp(ctk.CTk):
         if self.is_converting:
             return
         try:
-            options = {'target_resolution': self._get_target_resolution()} if metadata_only else self._get_options()
+            options = {'target_resolution': self._get_target_resolution(), 'identidade_unica': self.var_unique_identity.get()} if metadata_only else self._get_options()
         except ValueError:
             messagebox.showerror('Ajustes', 'Preencha os ajustes com numeros validos.')
             return
         self._pause_preview()
         self._stop_preview_stream()
-        self.btn_play.configure(state='disabled')
+        self._set_play_enabled(False)
         self.is_converting = True
         self.should_cancel = False
         self.btn_start.configure(state='disabled')
@@ -908,7 +1010,7 @@ class VideoConverterApp(ctk.CTk):
                 self._post_ui(lambda: self._show_progress(overall))
             try:
                 function = clean_metadata if metadata_only else convert_video
-                arguments = {} if metadata_only else options
+                arguments = {'identidade_unica': options['identidade_unica']} if metadata_only else options
                 if function(file_path, str(out_file), **arguments,
                             progress_callback=progress, cancel_check=lambda: self.should_cancel):
                     successes += 1

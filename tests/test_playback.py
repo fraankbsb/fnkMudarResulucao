@@ -50,7 +50,8 @@ class PlaybackTests(unittest.TestCase):
             with self.subTest(target=target):
                 stream = PreviewStream(str(self.source), self.metadata, target_resolution=target)
                 self.assertAlmostEqual(stream.size[0]/stream.size[1], target[0]/target[1])
-                self.assertLessEqual(max(stream.size), 640)
+                self.assertLessEqual(stream.size[0], 960)
+                self.assertLessEqual(stream.size[1], 720)
                 count, _ = self.read_stream(stream)
                 self.assertEqual(count, 60)
                 self.assertEqual(stream.process.poll(), 0)

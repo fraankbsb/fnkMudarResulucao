@@ -4,7 +4,10 @@ Leia e siga [AGENTS.md](AGENTS.md), que guarda as mesmas regras para Claude e Co
 
 Conversor desktop e CLI em Python, CustomTkinter e FFmpeg. Formatos 4:5, 9:16,
 1:1, 16:9 e 4:3; fundo desfocado, barras ou crop; capa, cortes, velocidade,
-espelhamento, nitidez, presets e previa sem audio.
+espelhamento, nitidez, presets, previa ampliavel com audio nativo do Windows,
+controles invisiveis, limpeza local de metadados e UUID unico por arquivo.
+Tela de entrada em launcher.py com versao de VERSION e atualizacao do GitHub.
+O perfil para celular usa MP4/H.264/AAC, sem inventar dados de aparelho.
 
 Repositorio: `fraankbsb/fnkMudarResulucao` (nome do remoto tem essa grafia),
 branch `main`. A pasta de desenvolvimento e a mesma que o atalho abre.

@@ -9,7 +9,7 @@ from PIL import Image
 from .converter import build_filter_complex, cover_filter, get_edit_timeline
 
 
-def preview_dimensions(target, bounds=(640, 640)):
+def preview_dimensions(target, bounds=(960, 720)):
     w, h = target
     divisor = math.gcd(w, h)
     rw, rh = w // divisor, h // divisor

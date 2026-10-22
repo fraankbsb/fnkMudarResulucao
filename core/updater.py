@@ -55,3 +55,12 @@ def pull_updates(repo_path=None):
 
 def restart_app():
     os.execl(sys.executable, sys.executable, *sys.argv)
+
+
+def local_version(repo_path=None):
+    path = Path(repo_path or PROJECT_DIR) / 'VERSION'
+    try:
+        return 'v' + path.read_text(encoding='utf-8').strip().lstrip('v')
+    except OSError:
+        result = run_git('rev-parse', '--short', 'HEAD', repo_path=repo_path)
+        return result.stdout.strip() or 'local'

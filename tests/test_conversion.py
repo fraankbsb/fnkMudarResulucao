@@ -153,13 +153,15 @@ class ConversionTests(unittest.TestCase):
         self.run_ffmpeg('-i', str(self.source), '-i', str(chapters), '-map', '0',
             '-map_metadata', '1', '-map_chapters', '1', '-c', 'copy',
             '-metadata', 'creation_time=2020-01-01T00:00:00Z',
-            '-metadata', 'location=+01.23+004.56/', str(tagged))
+            '-metadata', 'location=+01.23+004.56/', '-metadata', 'make=FNK_TEST_PHONE',
+            '-metadata', 'model=FNK_TEST_MODEL', '-metadata', 'serial_number=FNK_TEST_SERIAL',
+            '-movflags', '+use_metadata_tags', str(tagged))
         return tagged
 
     def assert_metadata_clean(self, path):
         raw = subprocess.check_output(['ffprobe', '-v', 'quiet', '-show_format',
             '-show_streams', '-show_chapters', '-of', 'json', str(path)]).decode('utf-8')
-        for value in ('PRIVADO', '2020-01-01', '+01.23'):
+        for value in ('PRIVADO', '2020-01-01', '+01.23', 'FNK_TEST_PHONE', 'FNK_TEST_MODEL', 'FNK_TEST_SERIAL'):
             self.assertNotIn(value, raw)
         self.assertFalse(json.loads(raw).get('chapters'))
 
@@ -190,6 +192,28 @@ class ConversionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assert_metadata_clean(output)
         self.assertEqual(get_video_metadata(str(output)).width, 160)
+
+    def test_unique_identity_and_mobile_profile(self):
+        import uuid
+        source=self.tagged_source()
+        identities=[]
+        for n in (1,2):
+            output=self.root/f'mobile_{n}.mp4'
+            convert_video(str(source),str(output),target_resolution=(120,150),preset='ultrafast',
+                          identidade_unica=True,perfil_celular=True)
+            self.assert_metadata_clean(output)
+            data=self.probe(output)
+            identifier=data['format']['tags']['content_identifier']
+            self.assertEqual(uuid.UUID(identifier).version,4)
+            identities.append(identifier)
+            self.assertEqual(data['format']['tags']['major_brand'],'mp42')
+            self.assertEqual([s['codec_name'] for s in data['streams']],['h264','aac'])
+            self.assertEqual(data['streams'][0]['pix_fmt'],'yuv420p')
+        self.assertNotEqual(*identities)
+        output=self.root/'clean_uuid.mp4'
+        clean_metadata(str(source),str(output),identidade_unica=True)
+        self.assert_metadata_clean(output)
+        self.assertEqual(uuid.UUID(self.probe(output)['format']['tags']['content_identifier']).version,4)
 
     def test_invalid_edits_preserve_existing_output(self):
         output = self.root / 'existing.mp4'
