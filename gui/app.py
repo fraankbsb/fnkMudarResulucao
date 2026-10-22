@@ -1,8 +1,10 @@
 import os
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, messagebox
+import uuid
 import customtkinter as ctk
 from PIL import Image
 
@@ -24,7 +26,10 @@ class VideoConverterApp(ctk.CTk):
         self.input_files = []
         self.is_converting = False
         self.should_cancel = False
-        self.current_preview_path = None
+        self.selected_video_path = None
+        self._preview_debounce_timer = None
+        self._preview_request_id = 0
+        self._preview_lock = threading.Lock()
 
         self._build_ui()
         threading.Thread(target=self._check_update_silent, daemon=True).start()
@@ -116,7 +121,8 @@ class VideoConverterApp(ctk.CTk):
         self.file_listbox = tk.Listbox(
             file_sec, height=5, bg='#2B2D30', fg='#EDEDED',
             selectbackground='#3A7EBF', selectforeground='white',
-            highlightthickness=0, borderwidth=0, font=('Consolas', 10)
+            highlightthickness=0, borderwidth=0, font=('Consolas', 10),
+            exportselection=False
         )
         self.file_listbox.pack(fill='x', padx=10, pady=(0, 10))
         self.file_listbox.bind('<<ListboxSelect>>', self._on_file_selected)
@@ -141,7 +147,7 @@ class VideoConverterApp(ctk.CTk):
                 '4:3 (Classico - 1440x1080)'
             ],
             width=320,
-            command=lambda _: self._update_preview_request()
+            command=lambda _: self._schedule_preview_update(immediate=True)
         )
         self.combo_target_preset.set('4:5 (Feed Instagram/FB - 1080x1350)')
         self.combo_target_preset.pack(side='left', fill='x', expand=True)
@@ -156,19 +162,19 @@ class VideoConverterApp(ctk.CTk):
         self.var_mode = ctk.StringVar(value='blur')
         self.radio_blur = ctk.CTkRadioButton(
             mode_sec, text='Fundo Desfocado Dinamico (Recomendado - Video 100% integro + fundo blur)',
-            variable=self.var_mode, value='blur', command=self._update_preview_request
+            variable=self.var_mode, value='blur', command=lambda: self._schedule_preview_update(immediate=True)
         )
         self.radio_blur.pack(anchor='w', padx=12, pady=4)
 
         self.radio_pillar = ctk.CTkRadioButton(
             mode_sec, text='Barras Solidas (Pillarbox/Letterbox - Video original sem cortes)',
-            variable=self.var_mode, value='pillarbox', command=self._update_preview_request
+            variable=self.var_mode, value='pillarbox', command=lambda: self._schedule_preview_update(immediate=True)
         )
         self.radio_pillar.pack(anchor='w', padx=12, pady=4)
 
         self.radio_crop = ctk.CTkRadioButton(
             mode_sec, text='Preenchimento Total (Corte proporcional ajustado sem barras)',
-            variable=self.var_mode, value='crop', command=self._update_preview_request
+            variable=self.var_mode, value='crop', command=lambda: self._schedule_preview_update(immediate=True)
         )
         self.radio_crop.pack(anchor='w', padx=12, pady=(4, 10))
 
@@ -182,14 +188,20 @@ class VideoConverterApp(ctk.CTk):
         row_blur = ctk.CTkFrame(adv_sec, fg_color='transparent')
         row_blur.pack(fill='x', padx=10, pady=4)
         ctk.CTkLabel(row_blur, text='Intensidade do Desfoque:').pack(side='left')
-        self.slider_blur = ctk.CTkSlider(row_blur, from_=10, to=80, number_of_steps=14, command=lambda _: self._update_preview_request())
+        self.slider_blur = ctk.CTkSlider(
+            row_blur, from_=10, to=80, number_of_steps=14,
+            command=lambda _: self._schedule_preview_update(immediate=False)
+        )
         self.slider_blur.set(35)
         self.slider_blur.pack(side='right', expand=True, fill='x', padx=(10, 0))
 
         row_color = ctk.CTkFrame(adv_sec, fg_color='transparent')
         row_color.pack(fill='x', padx=10, pady=4)
         ctk.CTkLabel(row_color, text='Cor das Barras (Modo Solido):').pack(side='left')
-        self.combo_color = ctk.CTkComboBox(row_color, values=['black', 'white', 'gray', '#111827'], width=120)
+        self.combo_color = ctk.CTkComboBox(
+            row_color, values=['black', 'white', 'gray', '#111827'], width=120,
+            command=lambda _: self._schedule_preview_update(immediate=True)
+        )
         self.combo_color.set('black')
         self.combo_color.pack(side='right')
 
@@ -234,7 +246,8 @@ class VideoConverterApp(ctk.CTk):
         self.lbl_preview_img.grid(row=0, column=0, padx=10, pady=10)
 
         self.btn_refresh_prev = ctk.CTkButton(
-            right_panel, text='Atualizar Preview', height=32, command=self._update_preview_request
+            right_panel, text='Atualizar Preview', height=32,
+            command=lambda: self._schedule_preview_update(immediate=True)
         )
         self.btn_refresh_prev.grid(row=2, column=0, padx=12, pady=(6, 12), sticky='ew')
 
@@ -327,11 +340,18 @@ class VideoConverterApp(ctk.CTk):
                     self.input_files.append(f)
                     self.file_listbox.insert(tk.END, os.path.basename(f))
             self.lbl_queue_count.configure(text=f'{len(self.input_files)} video(s) na fila')
-            if len(self.input_files) > 0 and self.file_listbox.curselection() == ():
-                self.file_listbox.selection_set(0)
-                self._update_preview_request()
+            if len(self.input_files) > 0:
+                if not self.selected_video_path or self.selected_video_path not in self.input_files:
+                    self.selected_video_path = self.input_files[0]
+                    self.file_listbox.selection_clear(0, tk.END)
+                    self.file_listbox.selection_set(0)
+                self._schedule_preview_update(immediate=True)
 
     def _clear_videos(self):
+        if self._preview_debounce_timer:
+            self.after_cancel(self._preview_debounce_timer)
+            self._preview_debounce_timer = None
+        self.selected_video_path = None
         self.input_files.clear()
         self.file_listbox.delete(0, tk.END)
         self.lbl_queue_count.configure(text='Nenhum video selecionado')
@@ -344,7 +364,14 @@ class VideoConverterApp(ctk.CTk):
             self.entry_out_dir.insert(0, folder)
 
     def _on_file_selected(self, event):
-        self._update_preview_request()
+        sel = self.file_listbox.curselection()
+        if sel and self.input_files:
+            idx = sel[0]
+            if 0 <= idx < len(self.input_files):
+                self.selected_video_path = self.input_files[idx]
+                self._schedule_preview_update(immediate=True)
+        elif self.selected_video_path and self.selected_video_path in self.input_files:
+            self._schedule_preview_update(immediate=True)
 
     def _get_target_resolution(self):
         val = self.combo_target_preset.get()
@@ -360,30 +387,68 @@ class VideoConverterApp(ctk.CTk):
             return 1440, 1080
         return 1080, 1350
 
-    def _update_preview_request(self):
+    def _schedule_preview_update(self, immediate: bool = False):
         sel = self.file_listbox.curselection()
-        if not sel or not self.input_files:
-            return
-        idx = sel[0]
-        video_path = self.input_files[idx]
-        threading.Thread(target=self._generate_and_show_preview, args=(video_path,), daemon=True).start()
+        if sel and self.input_files:
+            idx = sel[0]
+            if 0 <= idx < len(self.input_files):
+                self.selected_video_path = self.input_files[idx]
+        elif not self.selected_video_path and self.input_files:
+            self.selected_video_path = self.input_files[0]
+            self.file_listbox.selection_clear(0, tk.END)
+            self.file_listbox.selection_set(0)
 
-    def _generate_and_show_preview(self, video_path):
+        if not self.selected_video_path or not os.path.exists(self.selected_video_path):
+            return
+
+        if self._preview_debounce_timer:
+            self.after_cancel(self._preview_debounce_timer)
+            self._preview_debounce_timer = None
+
+        delay = 0 if immediate else 150
+        self._preview_debounce_timer = self.after(delay, self._dispatch_preview_thread)
+
+    def _dispatch_preview_thread(self):
+        self._preview_debounce_timer = None
+        if not self.selected_video_path or not os.path.exists(self.selected_video_path):
+            return
+
+        self._preview_request_id += 1
+        req_id = self._preview_request_id
+        video_path = self.selected_video_path
+        mode = self.var_mode.get()
+        res = self._get_target_resolution()
+        blur_val = int(self.slider_blur.get())
+        color_val = self.combo_color.get()
+
+        threading.Thread(
+            target=self._generate_and_show_preview,
+            args=(req_id, video_path, mode, res, blur_val, color_val),
+            daemon=True
+        ).start()
+
+    def _generate_and_show_preview(self, req_id, video_path, mode, res, blur_val, color_val):
+        temp_preview = os.path.join(os.environ.get('TEMP', '.'), f'preview_fnk_{uuid.uuid4().hex[:8]}.jpg')
         try:
-            self.lbl_preview_img.configure(text='Gerando previa...')
-            temp_preview = os.path.join(os.environ.get('TEMP', '.'), 'preview_fnk_universal.jpg')
-            res = self._get_target_resolution()
-            generate_preview_frame(
-                video_path=video_path,
-                output_image_path=temp_preview,
-                timestamp_sec=1.0,
-                mode=self.var_mode.get(),
-                target_resolution=res,
-                blur_strength=int(self.slider_blur.get()),
-                bg_color=self.combo_color.get()
-            )
-            img = Image.open(temp_preview)
-            # Adapta tamanho da exibição proporcionalmente ao aspect ratio
+            with self._preview_lock:
+                if req_id != self._preview_request_id:
+                    return
+                generate_preview_frame(
+                    video_path=video_path,
+                    output_image_path=temp_preview,
+                    timestamp_sec=1.0,
+                    mode=mode,
+                    target_resolution=res,
+                    blur_strength=blur_val,
+                    bg_color=color_val
+                )
+
+                if req_id != self._preview_request_id:
+                    return
+
+                with Image.open(temp_preview) as raw_img:
+                    img = raw_img.copy()
+
             aspect = res[0] / res[1] if res[1] > 0 else 0.8
             if aspect <= 1.0:
                 disp_h = 320
@@ -393,9 +458,23 @@ class VideoConverterApp(ctk.CTk):
                 disp_h = int(disp_w / aspect)
 
             ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(disp_w, disp_h))
-            self.lbl_preview_img.configure(image=ctk_img, text='')
+            self.after(0, lambda: self._apply_preview_image(req_id, ctk_img))
         except Exception as e:
-            self.lbl_preview_img.configure(text=f'Pre-visualizacao indisponivel\n{e}')
+            self.after(0, lambda: self._apply_preview_error(req_id, str(e)))
+        finally:
+            if os.path.exists(temp_preview):
+                try:
+                    os.remove(temp_preview)
+                except Exception:
+                    pass
+
+    def _apply_preview_image(self, req_id, ctk_img):
+        if req_id == self._preview_request_id:
+            self.lbl_preview_img.configure(image=ctk_img, text='')
+
+    def _apply_preview_error(self, req_id, error_msg):
+        if req_id == self._preview_request_id:
+            self.lbl_preview_img.configure(text=f'Pre-visualizacao indisponivel\n{error_msg}')
 
     def _start_conversion(self):
         if not self.input_files:
