@@ -5,7 +5,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from core.converter import convert_video, get_video_metadata, PRESET_RATIOS
+from core.converter import convert_video
 
 def main():
     parser = argparse.ArgumentParser(
@@ -25,7 +25,20 @@ def main():
     parser.add_argument('--preset', default='fast', choices=['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow'],
                         help='Preset de velocidade de compressao (padrao: fast)')
 
+    parser.add_argument('--sharpen-strength', type=float, default=0, help='Nitidez de 0 a 2')
+    parser.add_argument('--corte-inicio', type=float, default=0, help='Segundos removidos do inicio')
+    parser.add_argument('--corte-fim', type=float, default=0, help='Segundos removidos do fim')
+    parser.add_argument('--velocidade', type=float, default=1, help='Velocidade de 0.25 a 4x')
+    parser.add_argument('--espelhar', action='store_true', help='Espelhar horizontalmente')
+    parser.add_argument('--capa', help='Imagem de capa de abertura')
+    parser.add_argument('--capa-segundos', type=float, default=0.1, help='Duracao da capa')
+    parser.add_argument('--capa-ajuste', choices=['preencher', 'inteira', 'esticar'], default='preencher')
     args = parser.parse_args()
+    if (args.width is None) != (args.height is None):
+        parser.error('Informe --width e --height juntos.')
+    edits = dict(sharpen_strength=args.sharpen_strength, corte_inicio=args.corte_inicio,
+                 corte_fim=args.corte_fim, velocidade=args.velocidade, espelhar=args.espelhar,
+                 capa_path=args.capa, capa_segundos=args.capa_segundos, capa_ajuste=args.capa_ajuste)
 
     # Define a resolução alvo
     if args.width and args.height:
@@ -51,9 +64,10 @@ def main():
         out_dir = os.path.abspath(args.output) if args.output else os.path.join(input_path, f'convertidos_{target_res[0]}x{target_res[1]}')
         os.makedirs(out_dir, exist_ok=True)
         print(f'[LOTE] Processando {len(files)} video(s) para {target_res[0]}x{target_res[1]}...')
+        failures = 0
         for idx, f in enumerate(files, 1):
             name, ext = os.path.splitext(os.path.basename(f))
-            dest = os.path.join(out_dir, f'{name}_{target_res[0]}x{target_res[1]}{ext}')
+            dest = os.path.join(out_dir, f'{name}_{target_res[0]}x{target_res[1]}.mp4')
             print(f'\n[{idx}/{len(files)}] Convertendo: {os.path.basename(f)} -> {os.path.basename(dest)}')
             try:
                 def progress(p, text):
@@ -70,11 +84,15 @@ def main():
                     bg_color=args.bg_color,
                     crf=args.crf,
                     preset=args.preset,
-                    progress_callback=progress
+                    progress_callback=progress,
+                    **edits
                 )
                 print('\n[CONCLUIDO COM SUCESSO]')
             except Exception as e:
+                failures += 1
                 print(f'\n[ERRO]: {e}')
+        if failures:
+            sys.exit(1)
     else:
         if not os.path.isfile(input_path):
             print(f'[ERRO] Arquivo de entrada nao encontrado: {input_path}')
@@ -83,7 +101,7 @@ def main():
             out_file = os.path.abspath(args.output)
         else:
             base, ext = os.path.splitext(input_path)
-            out_file = f'{base}_{target_res[0]}x{target_res[1]}{ext}'
+            out_file = f'{base}_{target_res[0]}x{target_res[1]}.mp4'
 
         print(f'[INICIO] Processando video: {input_path}')
         print(f'         Modo: {args.mode} | Resolucao alvo: {target_res[0]}x{target_res[1]} ({args.target})')
@@ -106,7 +124,8 @@ def main():
                 bg_color=args.bg_color,
                 crf=args.crf,
                 preset=args.preset,
-                progress_callback=progress
+                progress_callback=progress,
+                **edits
             )
             elapsed = time.time() - start
             print(f'\n[CONCLUIDO] Video gerado em {elapsed:.2f} segundos: {out_file}')

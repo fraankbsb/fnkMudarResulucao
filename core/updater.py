@@ -1,43 +1,57 @@
+"""Atualizacoes do checkout usado pelo aplicativo, sempre sem rebase automatico."""
 import os
+from pathlib import Path
 import subprocess
 import sys
 
-def get_git_status():
-    try:
-        cmd_fetch = ['git', 'fetch', 'origin']
-        subprocess.run(cmd_fetch, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15)
-        
-        cmd_status = ['git', 'status', '-uno']
-        res = subprocess.run(cmd_status, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10)
-        output = res.stdout
-        
-        behind = 'behind' in output
-        ahead = 'ahead' in output
-        up_to_date = 'up to date' in output or 'Your branch is up to date' in output
-        
-        return {
-            'success': True,
-            'behind': behind,
-            'ahead': ahead,
-            'up_to_date': up_to_date,
-            'message': output
-        }
-    except Exception as e:
-        return {'success': False, 'message': str(e)}
+PROJECT_DIR = Path(__file__).resolve().parents[1]
 
-def pull_updates():
+
+def run_git(*args, repo_path=None, timeout=25):
+    startupinfo = None
+    if os.name == 'nt':
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    return subprocess.run(['git', '-C', str(repo_path or PROJECT_DIR), *args],
+        capture_output=True, text=True, encoding='utf-8', errors='replace',
+        startupinfo=startupinfo, timeout=timeout)
+
+
+def get_git_status(repo_path=None, fetch=True):
     try:
-        cmd = ['git', 'pull', '--rebase', 'origin', 'main']
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=25)
-        if res.returncode != 0:
-            # Tenta sem branch especifica caso esteja em master
-            cmd = ['git', 'pull', 'origin']
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=25)
-        
-        return res.returncode == 0, res.stdout or res.stderr
-    except Exception as e:
-        return False, str(e)
+        if fetch:
+            result = run_git('fetch', 'origin', repo_path=repo_path)
+            if result.returncode:
+                raise RuntimeError(result.stderr.strip() or 'Falha ao consultar o GitHub.')
+        branch_result = run_git('branch', '--show-current', repo_path=repo_path)
+        branch = branch_result.stdout.strip()
+        if branch_result.returncode or not branch:
+            raise RuntimeError('Repositorio sem branch ativa.')
+        counts = run_git('rev-list', '--left-right', '--count', f'HEAD...origin/{branch}', repo_path=repo_path)
+        if counts.returncode:
+            raise RuntimeError(counts.stderr.strip())
+        ahead, behind = map(int, counts.stdout.split())
+        status = run_git('status', '--porcelain', repo_path=repo_path)
+        if status.returncode:
+            raise RuntimeError(status.stderr.strip())
+        return dict(success=True, branch=branch, ahead=ahead, behind=behind,
+                    dirty=bool(status.stdout), up_to_date=ahead == behind == 0 and not status.stdout,
+                    message=status.stdout.strip())
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        return dict(success=False, message=str(error))
+
+
+def pull_updates(repo_path=None):
+    info = get_git_status(repo_path)
+    if not info.get('success'):
+        return False, info['message']
+    if info['dirty']:
+        return False, 'Ha alteracoes locais. Salve e envie com sync.bat antes de atualizar.'
+    if info['ahead']:
+        return False, 'Ha commits locais. Envie com sync.bat antes de atualizar.'
+    result = run_git('pull', '--ff-only', 'origin', info['branch'], repo_path=repo_path)
+    return result.returncode == 0, (result.stdout or result.stderr).strip()
+
 
 def restart_app():
-    python = sys.executable
-    os.execl(python, python, *sys.argv)
+    os.execl(sys.executable, sys.executable, *sys.argv)

@@ -1,0 +1,15 @@
+{
+  "name": "Stories e Reels (9:16 + Nitidez Suave)",
+  "target_preset": "9:16 (Stories/Reels/TikTok - 1080x1920)",
+  "mode": "blur",
+  "blur_strength": 35,
+  "sharpen_strength": 0.6,
+  "bg_color": "black",
+  "crf": 18,
+  "corte_inicio": 0.25,
+  "corte_fim": 0.25,
+  "espelhar": false,
+  "velocidade": "1.02",
+  "capa_segundos": 0.1,
+  "capa_ajuste": "preencher"
+}

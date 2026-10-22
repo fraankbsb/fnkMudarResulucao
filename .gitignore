@@ -12,3 +12,19 @@ preview_*.jpg
 dist/
 build/
 *.spec
+# Arquivos pessoais e credenciais nunca fazem parte do codigo publicado.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+update_token.txt
+cookies/
+sessions/
+.venv/
+venv/
+.fnk_*
+*.mp4
+*.mov
+*.mkv
+*.webm
