@@ -1,7 +1,7 @@
 import math
 import os
 import subprocess
-from .converter import (build_filter_complex, cover_filter, ensure_even_dimensions,
+from .converter import (build_filter_complex, cover_filter, ensure_even_dimensions, detectar_cor_fundo_video,
                         get_edit_timeline, get_video_metadata)
 
 
@@ -15,6 +15,8 @@ def generate_preview_frame(
 ) -> str:
     """timestamp_sec representa a linha de tempo do resultado, incluindo a capa."""
     metadata = metadata or get_video_metadata(video_path)
+    if str(bg_color).lower() in ('auto', 'detectar', 'auto_detect'):
+        bg_color = detectar_cor_fundo_video(video_path)
     w, h = ensure_even_dimensions(*target_resolution)
     start, duration, speed, cover_duration, fps = get_edit_timeline(
         metadata, corte_inicio, corte_fim, velocidade, capa_path, capa_segundos)

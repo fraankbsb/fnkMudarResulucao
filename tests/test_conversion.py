@@ -243,6 +243,38 @@ class ConversionTests(unittest.TestCase):
         self.assertEqual(output.read_bytes(), b'existing file')
         self.assertFalse(list(self.root.glob('.fnk_*')))
 
+
+    def test_detectar_cor_fundo_template_branco_e_preto(self):
+        from PIL import Image
+        from core.converter import detectar_fundo_da_imagem, detectar_cor_fundo_video
+        # Template branco com card
+        img_branca = Image.new('RGB', (1080, 1920), (255, 255, 255))
+        for x in range(200, 880):
+            for y in range(400, 1500):
+                img_branca.putpixel((x, y), (40, 120, 160))
+        path_branca = self.root / 'template_branco.png'
+        img_branca.save(path_branca)
+        self.assertEqual(detectar_fundo_da_imagem(img_branca), 'branco')
+        self.assertEqual(detectar_cor_fundo_video(str(path_branca)), '#ffffff')
+
+        # Template preto
+        img_preta = Image.new('RGB', (1080, 1920), (10, 10, 10))
+        for x in range(200, 880):
+            for y in range(400, 1500):
+                img_preta.putpixel((x, y), (200, 80, 50))
+        path_preta = self.root / 'template_preto.png'
+        img_preta.save(path_preta)
+        self.assertEqual(detectar_fundo_da_imagem(img_preta), 'preto')
+        self.assertEqual(detectar_cor_fundo_video(str(path_preta)), '#000000')
+
+    def test_velocidade_lenta_e_bg_color_auto(self):
+        output = self.root / 'speed_auto.mp4'
+        # Testa conversao com velocidade 0.1 e bg_color auto sem falhar
+        ok = convert_video(str(self.source), str(output), target_resolution=(120, 150),
+                           velocidade=0.1, bg_color='auto')
+        self.assertTrue(ok)
+        self.assertTrue(output.exists())
+
     def test_converter_imagem_capa_1080x1920(self):
         import os
         from PIL import Image

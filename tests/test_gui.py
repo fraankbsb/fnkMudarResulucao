@@ -218,3 +218,19 @@ class GuiTests(unittest.TestCase):
         dummy_preset = {'target_preset': list(app._get_all_target_preset_names())[0], 'mode': 'blur', 'nome_unico': False}
         app._apply_preset_data(dummy_preset)
         self.assertFalse(app.var_unique_filename.get())
+
+    def test_auto_color_detection_toggle_and_preset(self):
+        app = self.app
+        app.var_auto_color.set(True)
+        opts = app._get_options()
+        self.assertEqual(opts['bg_color'], 'auto')
+        self.assertTrue(opts['auto_cor_fundo'])
+
+        # Desmarcar auto e usar cor customizada
+        app.var_auto_color.set(False)
+        app.entry_color.delete(0, 'end')
+        app.entry_color.insert(0, '#123456')
+        app._on_color_entry_change()
+        opts2 = app._get_options()
+        self.assertEqual(opts2['bg_color'], '#123456')
+        self.assertFalse(opts2['auto_cor_fundo'])

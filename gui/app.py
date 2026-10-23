@@ -242,6 +242,14 @@ class VideoConverterApp(ctk.CTk):
         self.color_preview_box = ctk.CTkLabel(row_color, text='', width=24, height=24, corner_radius=4, fg_color='#000000')
         self.color_preview_box.pack(side='right')
 
+        self.var_auto_color = ctk.BooleanVar(value=True)
+        self.chk_auto_color = ctk.CTkCheckBox(
+            adv_sec, text='Auto: Detectar cor do template (Preto / Branco)',
+            variable=self.var_auto_color,
+            command=self._on_auto_color_toggle
+        )
+        self.chk_auto_color.pack(anchor='w', padx=12, pady=(2, 6))
+
         # Compatibilidade com scripts e testes que usavam combo_color
         class _ColorAdapter:
             def __init__(self, entry, callback):
@@ -717,7 +725,22 @@ class VideoConverterApp(ctk.CTk):
             self.slider_crf.set(18)
         self._update_percentages()
 
+    def _on_auto_color_toggle(self):
+        self._update_color_box()
+        self._schedule_preview_update(immediate=True)
+
     def _update_color_box(self):
+        if getattr(self, 'var_auto_color', None) and self.var_auto_color.get():
+            if self.selected_video_path and os.path.exists(self.selected_video_path):
+                try:
+                    from core.converter import detectar_cor_fundo_video
+                    cor_detectada = detectar_cor_fundo_video(self.selected_video_path)
+                    self.color_preview_box.configure(fg_color=cor_detectada)
+                    return
+                except Exception:
+                    pass
+            self.color_preview_box.configure(fg_color='#000000')
+            return
         color = self.entry_color.get().strip()
         try:
             self.color_preview_box.configure(fg_color=color)
@@ -725,12 +748,16 @@ class VideoConverterApp(ctk.CTk):
             pass
 
     def _on_color_entry_change(self):
+        if getattr(self, 'var_auto_color', None) and self.var_auto_color.get():
+            self.var_auto_color.set(False)
         color = self.entry_color.get().strip()
         self._update_color_box()
         if re.fullmatch(r'[a-zA-Z]+|#[0-9a-fA-F]{6}|0x[0-9a-fA-F]{6}', color):
             self._schedule_preview_update(immediate=True)
 
     def _pick_bar_color(self):
+        if getattr(self, 'var_auto_color', None) and self.var_auto_color.get():
+            self.var_auto_color.set(False)
         current = self.entry_color.get().strip() or '#000000'
         chosen = colorchooser.askcolor(color=current, title='Escolher cor das barras solidas')
         if chosen and chosen[1]:
@@ -791,8 +818,10 @@ class VideoConverterApp(ctk.CTk):
                     capa_segundos=number(self.var_cover_seconds), capa_ajuste=self.var_cover_fit.get())
 
     def _get_options(self):
+        bg = 'auto' if (getattr(self, 'var_auto_color', None) and self.var_auto_color.get()) else self.combo_color.get()
         return dict(mode=self.var_mode.get(), target_resolution=self._get_target_resolution(),
-                    blur_strength=int(self.slider_blur.get()), bg_color=self.combo_color.get(),
+                    blur_strength=int(self.slider_blur.get()), bg_color=bg,
+                    auto_cor_fundo=(getattr(self, 'var_auto_color', None) and self.var_auto_color.get()),
                     crf=int(self.slider_crf.get()), limpar_metadados=self.var_clean_metadata.get(),
                     identidade_unica=self.var_unique_identity.get(), nome_unico=self.var_unique_filename.get(), perfil_celular=self.var_mobile_profile.get(),
                     **self._get_edit_options())
@@ -805,7 +834,7 @@ class VideoConverterApp(ctk.CTk):
             raise ValueError('Proporcao ou modo invalido na configuracao.')
         numeric = {'blur_strength': (0, 80, 35), 'sharpen_strength': (0, 2, 0),
                    'crf': (0, 51, 18), 'corte_inicio': (0, float('inf'), 0),
-                   'corte_fim': (0, float('inf'), 0), 'velocidade': (0.25, 4, 1),
+                   'corte_fim': (0, float('inf'), 0), 'velocidade': (0.05, 10.0, 1),
                    'capa_segundos': (0.001, float('inf'), 0.1)}
         for key, (low, high, default) in numeric.items():
             value = float(data.get(key, default))
@@ -824,6 +853,8 @@ class VideoConverterApp(ctk.CTk):
                 (self.var_speed, 'velocidade', 1), (self.var_cover_seconds, 'capa_segundos', 0.1),
                 (self.var_cover, 'capa_path', ''), (self.var_cover_fit, 'capa_ajuste', 'preencher')]:
             variable.set(data.get(key) or default)
+        if 'auto_cor_fundo' in data and getattr(self, 'var_auto_color', None):
+            self.var_auto_color.set(bool(data['auto_cor_fundo']))
         self.var_clean_metadata.set(bool(data.get('limpar_metadados', True)))
         self.var_unique_identity.set(bool(data.get('identidade_unica', True)))
         self.var_unique_filename.set(bool(data.get('nome_unico', False)))
@@ -1190,7 +1221,12 @@ class VideoConverterApp(ctk.CTk):
                 self._post_ui(lambda: self._show_progress(overall))
             try:
                 function = clean_metadata if metadata_only else convert_video
-                arguments = {'identidade_unica': options['identidade_unica']} if metadata_only else options
+                arguments = {'identidade_unica': options['identidade_unica']} if metadata_only else dict(options)
+                if not metadata_only:
+                    arguments.pop('auto_cor_fundo', None)
+                    if (getattr(self, 'var_auto_color', None) and self.var_auto_color.get()) or str(arguments.get('bg_color')).lower() in ('auto', 'detectar'):
+                        from core.converter import detectar_cor_fundo_video
+                        arguments['bg_color'] = detectar_cor_fundo_video(file_path)
                 if function(file_path, str(out_file), **arguments,
                             progress_callback=progress, cancel_check=lambda: self.should_cancel):
                     successes += 1

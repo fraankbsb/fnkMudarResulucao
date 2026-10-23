@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 import threading
 from PIL import Image
-from .converter import build_filter_complex, cover_filter, get_edit_timeline
+from .converter import build_filter_complex, cover_filter, get_edit_timeline, detectar_cor_fundo_video
 
 
 def preview_dimensions(target, bounds=(960, 720)):
@@ -37,7 +37,7 @@ def build_preview_command(video_path, metadata, position=0.0, **options):
     scale = w / target[0]
     filters = build_filter_complex(metadata.width, metadata.height, w, h,
         options.get('mode', 'blur'), options.get('blur_strength', 35) * scale,
-        options.get('bg_color', 'black'), options.get('sharpen_strength', 0))
+        detectar_cor_fundo_video(video_path) if str(options.get('bg_color', 'black')).lower() in ('auto', 'detectar', 'auto_detect') else options.get('bg_color', 'black'), options.get('sharpen_strength', 0))
     filters = filters.replace('[outv]', '[composed]')
     mirror = ',hflip' if options.get('espelhar') else ''
     filters += (f';[composed]setpts=(PTS-STARTPTS)/{speed:.8f}{mirror},'

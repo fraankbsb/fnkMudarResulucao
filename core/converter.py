@@ -113,7 +113,7 @@ def get_edit_timeline(metadata, corte_inicio=0.0, corte_fim=0.0, velocidade=1.0,
                       capa_path=None, capa_segundos=0.1):
     start = _finite(corte_inicio, 'corte inicial')
     end = _finite(corte_fim, 'corte final')
-    speed = _finite(velocidade, 'velocidade', 0.25, 4.0)
+    speed = _finite(velocidade, 'velocidade', 0.05, 10.0)
     duration = metadata.duration - start - end
     if duration <= 0:
         raise ValueError('Os cortes devem deixar algum trecho do video.')
@@ -142,6 +142,69 @@ def converter_imagem_capa_1080x1920(caminho_imagem: str, caminho_saida: Optional
     return caminho_saida
 
 
+def _claros_escuros_faixa(faixa):
+    claros = escuros = 0
+    img_rgb = faixa.convert('RGB')
+    w_f, h_f = img_rgb.size
+    pixels = [img_rgb.getpixel((x, y)) for y in range(h_f) for x in range(w_f)]
+    for r, g, b in pixels:
+        mx, mn = max(r, g, b), min(r, g, b)
+        if mn >= 200 and mx - mn <= 35:
+            claros += 1
+        elif mx <= 55:
+            escuros += 1
+    n = max(1, len(pixels))
+    return claros / n, escuros / n
+
+
+def detectar_fundo_da_imagem(img) -> str:
+    im = img.convert('RGB')
+    w, h = im.size
+    m = max(2, round(w * 0.025))
+    lados = [_claros_escuros_faixa(im.crop(cx).resize((4, 96))) for cx in ((0, 0, m, h), (w - m, 0, w, h))]
+    if all(e >= 0.90 for _, e in lados):
+        return 'preto'
+    claros, escuros = _claros_escuros_faixa(im.crop((0, 0, w, max(4, round(h * 0.14)))).resize((96, 24)))
+    if claros >= 0.55:
+        return 'branco'
+    if escuros >= 0.55:
+        return 'preto'
+    claros_b, escuros_b = _claros_escuros_faixa(im.crop((0, max(0, h - round(h * 0.14)), w, h)).resize((96, 24)))
+    if claros_b >= 0.55:
+        return 'branco'
+    if escuros_b >= 0.55:
+        return 'preto'
+    return 'preto'
+
+
+def detectar_cor_fundo_video(video_path: str, timestamp_sec: float = 0.5) -> str:
+    try:
+        from io import BytesIO
+        from PIL import Image
+        startupinfo = None
+        if os.name == 'nt':
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        cmd = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin',
+               '-ss', str(max(0.1, timestamp_sec)), '-i', video_path,
+               '-frames:v', '1', '-vf', 'scale=480:-2', '-f', 'image2', '-vcodec', 'mjpeg', 'pipe:1']
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo)
+        if p.stdout:
+            with Image.open(BytesIO(p.stdout)) as img:
+                tipo = detectar_fundo_da_imagem(img)
+                return '#ffffff' if tipo == 'branco' else '#000000'
+        cmd2 = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin',
+                '-i', video_path, '-frames:v', '1', '-vf', 'scale=480:-2',
+                '-f', 'image2', '-vcodec', 'mjpeg', 'pipe:1']
+        p2 = subprocess.run(cmd2, stdout=subprocess.PIPE, stderr=subprocess.PIPE, startupinfo=startupinfo)
+        if p2.stdout:
+            with Image.open(BytesIO(p2.stdout)) as img:
+                tipo = detectar_fundo_da_imagem(img)
+                return '#ffffff' if tipo == 'branco' else '#000000'
+    except Exception:
+        pass
+    return '#000000'
+
 def cover_filter(w, h, adjustment):
     if adjustment == 'preencher':
         result = (f'scale={w}:{h}:force_original_aspect_ratio=increase:force_divisible_by=2,'
@@ -162,7 +225,7 @@ def build_filter_complex(input_w, input_h, target_w, target_h, mode='blur',
     strength = _finite(sharpen_strength, 'nitidez', 0, 2)
     blur = _finite(blur_strength, 'desfoque', 0, 80)
     # Somente nomes e cores hexadecimais; nao aceitar sintaxe de filtros na cor.
-    if not re.fullmatch(r'[a-zA-Z]+|#[0-9a-fA-F]{6}|0x[0-9a-fA-F]{6}', bg_color):
+    if not re.fullmatch(r'auto|detectar|[a-zA-Z]+|#[0-9a-fA-F]{6}|0x[0-9a-fA-F]{6}', bg_color):
         raise ValueError('Cor das barras invalida.')
     sharpen = f',unsharp=5:5:{strength:.3f}:5:5:0' if strength > 0 else ''
     fit = f'scale={w}:{h}:force_original_aspect_ratio=decrease:force_divisible_by=2,setsar=1'
@@ -219,6 +282,8 @@ def convert_video(
         raise ValueError('O perfil para celular usa saida MP4.')
     _finite(crf, 'qualidade CRF', 0, 51)
     metadata = get_video_metadata(input_path)
+    if str(bg_color).lower() in ('auto', 'detectar', 'auto_detect'):
+        bg_color = detectar_cor_fundo_video(input_path)
     w, h = ensure_even_dimensions(*target_resolution)
     start, duration, speed, cover_duration, fps = get_edit_timeline(
         metadata, corte_inicio, corte_fim, velocidade, capa_path, capa_segundos)
@@ -305,9 +370,13 @@ def clean_metadata(input_path, output_path, progress_callback=None, cancel_check
 
 def _run_output(cmd, output_path, total, progress_callback, cancel_check):
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    fd, temp_output = tempfile.mkstemp(prefix='.fnk_', suffix=os.path.splitext(output_path)[1],
-                                     dir=os.path.dirname(output_path))
-    os.close(fd)
+    ext = os.path.splitext(output_path)[1]
+    temp_output = os.path.join(os.path.dirname(output_path), f'.fnk_tmp_{uuid.uuid4().hex[:12]}{ext}')
+    if os.path.exists(temp_output):
+        try:
+            os.remove(temp_output)
+        except OSError:
+            pass
     cmd = [*cmd, '-progress', 'pipe:1', '-nostats', temp_output]
     startupinfo = None
     if os.name == 'nt':
@@ -350,7 +419,16 @@ def _run_output(cmd, output_path, total, progress_callback, cancel_check):
                 errors.seek(0)
                 detail = errors.read().decode('utf-8', errors='replace')[-5000:]
                 raise RuntimeError(f'Erro ao converter video com FFmpeg: {detail}')
-        os.replace(temp_output, output_path)
+        try:
+            os.replace(temp_output, output_path)
+        except OSError:
+            time.sleep(0.1)
+            if os.path.exists(output_path):
+                try:
+                    os.remove(output_path)
+                except OSError:
+                    pass
+            os.replace(temp_output, output_path)
         if progress_callback:
             progress_callback(1.0, '100%')
         return True
