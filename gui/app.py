@@ -1,3 +1,5 @@
+import re
+import uuid
 import os
 import json
 import math
@@ -7,7 +9,7 @@ import sys
 import threading
 import time
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, colorchooser
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
@@ -48,6 +50,9 @@ class VideoConverterApp(ctk.CTk):
         self._preview_expanded = False
         self._preview_duration = 0.0
         self._preview_position = 0.0
+        self._custom_ratios_file = Path(__file__).resolve().parent.parent / 'presets' / 'custom_ratios.json'
+        self._custom_ratios = {}
+        self._load_custom_ratios()
         self._closed = False
         self._build_ui()
         self.bind('<Escape>', lambda _: self._toggle_preview_size() if self._preview_expanded else None)
@@ -163,12 +168,17 @@ class VideoConverterApp(ctk.CTk):
 
         self.combo_target_preset = ctk.CTkComboBox(
             row_preset,
-            values=list(PRESET_RATIOS),
-            width=320,
+            values=self._get_all_target_preset_names(),
+            width=280,
             command=lambda _: self._schedule_preview_update(immediate=True)
         )
         self.combo_target_preset.set('4:5 (Feed Instagram/FB - 1080x1350)')
-        self.combo_target_preset.pack(side='left', fill='x', expand=True)
+        self.combo_target_preset.pack(side='left', fill='x', expand=True, padx=(0, 6))
+
+        self.btn_new_ratio = ctk.CTkButton(
+            row_preset, text='+ Definicao', width=90, command=self._open_new_ratio_dialog
+        )
+        self.btn_new_ratio.pack(side='right')
 
         # Modo de Composicao
         mode_sec = ctk.CTkFrame(left_panel, corner_radius=8)
@@ -217,23 +227,55 @@ class VideoConverterApp(ctk.CTk):
 
         row_color = ctk.CTkFrame(adv_sec, fg_color='transparent')
         row_color.pack(fill='x', padx=10, pady=4)
-        ctk.CTkLabel(row_color, text='Cor das Barras (Modo Solido):').pack(side='left')
-        self.combo_color = ctk.CTkComboBox(
-            row_color, values=['black', 'white', 'gray', '#111827'], width=120,
-            command=lambda _: self._schedule_preview_update(immediate=True)
+        ctk.CTkLabel(row_color, text='Cor das Barras (Solido #):').pack(side='left')
+
+        self.btn_pick_color = ctk.CTkButton(
+            row_color, text='Escolher...', width=80, command=self._pick_bar_color
         )
-        self.combo_color.set('black')
-        self.combo_color.pack(side='right')
+        self.btn_pick_color.pack(side='right', padx=(6, 0))
+
+        self.entry_color = ctk.CTkEntry(row_color, width=90, placeholder_text='#000000')
+        self.entry_color.insert(0, '#000000')
+        self.entry_color.pack(side='right', padx=(6, 0))
+        self.entry_color.bind('<KeyRelease>', lambda _: self._on_color_entry_change())
+
+        self.color_preview_box = ctk.CTkLabel(row_color, text='', width=24, height=24, corner_radius=4, fg_color='#000000')
+        self.color_preview_box.pack(side='right')
+
+        # Compatibilidade com scripts e testes que usavam combo_color
+        class _ColorAdapter:
+            def __init__(self, entry, callback):
+                self._entry = entry
+                self._callback = callback
+            def get(self):
+                val = self._entry.get().strip()
+                return val if val else '#000000'
+            def set(self, val):
+                self._entry.delete(0, 'end')
+                self._entry.insert(0, str(val))
+                self._callback()
+        self.combo_color = _ColorAdapter(self.entry_color, self._update_color_box)
 
         row_crf = ctk.CTkFrame(adv_sec, fg_color='transparent')
-        row_crf.pack(fill='x', padx=10, pady=(4, 10))
+        row_crf.pack(fill='x', padx=10, pady=(4, 4))
         ctk.CTkLabel(row_crf, text='Qualidade CRF (menor = melhor):').pack(side='left')
         self.slider_crf = ctk.CTkSlider(row_crf, from_=0, to=51, number_of_steps=51,
-            command=lambda _: self._update_percentages())
+            command=lambda _: self._on_crf_slider_change())
         self.slider_crf.set(18)
         self.slider_crf.pack(side='left', expand=True, fill='x', padx=10)
         self.lbl_crf_value = ctk.CTkLabel(row_crf, width=155)
         self.lbl_crf_value.pack(side='right')
+
+        row_max_q = ctk.CTkFrame(adv_sec, fg_color='transparent')
+        row_max_q.pack(fill='x', padx=10, pady=(0, 10))
+        self.var_max_quality = tk.BooleanVar(value=False)
+        self.chk_max_quality = ctk.CTkCheckBox(
+            row_max_q,
+            text='Qualidade Maxima (CRF 0 - Fidelidade visual total sem perdas)',
+            variable=self.var_max_quality,
+            command=self._on_toggle_max_quality
+        )
+        self.chk_max_quality.pack(anchor='w')
 
         edit_sec = ctk.CTkFrame(left_panel, corner_radius=8)
         edit_sec.pack(fill='x', padx=10, pady=8)
@@ -292,8 +334,11 @@ class VideoConverterApp(ctk.CTk):
         ctk.CTkLabel(metadata_sec, text='Remove autor, titulo, comentarios, datas e localizacao.\nMantem os dados tecnicos necessarios para reproduzir o video.',
                     justify='left', wraplength=450, font=ctk.CTkFont(size=11)).pack(anchor='w', padx=10, pady=4)
         self.var_unique_identity = tk.BooleanVar(value=True)
+        self.var_unique_filename = tk.BooleanVar(value=False)
         self.var_mobile_profile = tk.BooleanVar(value=True)
-        ctk.CTkCheckBox(metadata_sec, text='Gerar identificador unico por video (UUID)',
+        ctk.CTkCheckBox(metadata_sec, text='Nome de arquivo unico e exclusivo por video (sufixo unico)',
+            variable=self.var_unique_filename).pack(anchor='w', padx=10, pady=4)
+        ctk.CTkCheckBox(metadata_sec, text='Gerar identificador unico por video (UUID nos metadados)',
             variable=self.var_unique_identity).pack(anchor='w', padx=10, pady=4)
         ctk.CTkCheckBox(metadata_sec, text='Formato para celular: MP4 / H.264 / AAC',
             variable=self.var_mobile_profile).pack(anchor='w', padx=10, pady=4)
@@ -568,8 +613,132 @@ class VideoConverterApp(ctk.CTk):
         elif self.selected_video_path and self.selected_video_path in self.input_files:
             self._schedule_preview_update(immediate=True)
 
+    def _load_custom_ratios(self):
+        self._custom_ratios = {}
+        if self._custom_ratios_file.exists():
+            try:
+                data = json.loads(self._custom_ratios_file.read_text(encoding='utf-8'))
+                if isinstance(data, dict):
+                    for k, v in data.items():
+                        if isinstance(v, (list, tuple)) and len(v) == 2:
+                            self._custom_ratios[k] = (int(v[0]), int(v[1]))
+            except Exception:
+                pass
+
+    def _save_custom_ratios(self):
+        try:
+            self._custom_ratios_file.parent.mkdir(parents=True, exist_ok=True)
+            self._custom_ratios_file.write_text(
+                json.dumps(self._custom_ratios, indent=2, ensure_ascii=False),
+                encoding='utf-8'
+            )
+        except Exception as error:
+            messagebox.showerror('Definicoes', f'Erro ao salvar definicoes personalizadas: {error}')
+
+    def _get_all_target_preset_names(self):
+        return list(PRESET_RATIOS) + list(self._custom_ratios)
+
     def _get_target_resolution(self):
-        return PRESET_RATIOS.get(self.combo_target_preset.get(), (1080, 1350))
+        key = self.combo_target_preset.get()
+        if key in self._custom_ratios:
+            return self._custom_ratios[key]
+        return PRESET_RATIOS.get(key, (1080, 1350))
+
+    def _open_new_ratio_dialog(self):
+        dialog = ctk.CTkToplevel(self)
+        dialog.title('Criar Nova Definicao de Proporcao')
+        dialog.geometry('420x290')
+        dialog.resizable(False, False)
+        dialog.grab_set()
+
+        ctk.CTkLabel(dialog, text='Criar Proporcao / Resolucao Personalizada', font=ctk.CTkFont(size=14, weight='bold')).pack(pady=(16, 10))
+
+        frame = ctk.CTkFrame(dialog, fg_color='transparent')
+        frame.pack(fill='x', padx=20, pady=5)
+
+        ctk.CTkLabel(frame, text='Nome da Definicao:').pack(anchor='w', pady=(0, 2))
+        entry_name = ctk.CTkEntry(frame, placeholder_text='Ex: 16:9 Ultra HD (3840x2160)')
+        entry_name.pack(fill='x', pady=(0, 8))
+
+        row_dims = ctk.CTkFrame(frame, fg_color='transparent')
+        row_dims.pack(fill='x', pady=4)
+
+        col_w = ctk.CTkFrame(row_dims, fg_color='transparent')
+        col_w.pack(side='left', expand=True, fill='x', padx=(0, 5))
+        ctk.CTkLabel(col_w, text='Largura (px):').pack(anchor='w')
+        entry_w = ctk.CTkEntry(col_w, placeholder_text='1080')
+        entry_w.pack(fill='x')
+
+        col_h = ctk.CTkFrame(row_dims, fg_color='transparent')
+        col_h.pack(side='right', expand=True, fill='x', padx=(5, 0))
+        ctk.CTkLabel(col_h, text='Altura (px):').pack(anchor='w')
+        entry_h = ctk.CTkEntry(col_h, placeholder_text='1920')
+        entry_h.pack(fill='x')
+
+        def save_ratio():
+            name = entry_name.get().strip()
+            w_str = entry_w.get().strip()
+            h_str = entry_h.get().strip()
+            if not name:
+                messagebox.showerror('Erro', 'Informe um nome para a definicao.')
+                return
+            try:
+                w, h = int(w_str), int(h_str)
+                if w < 16 or h < 16:
+                    raise ValueError('Dimensoes minimas de 16x16 pixels.')
+            except ValueError as e:
+                messagebox.showerror('Erro', f'Dimensoes invalidas: {e}')
+                return
+            label = f'{name} ({w}x{h})' if f'{w}x{h}' not in name else name
+            self._custom_ratios[label] = (w, h)
+            self._save_custom_ratios()
+            names = self._get_all_target_preset_names()
+            self.combo_target_preset.configure(values=names)
+            self.combo_target_preset.set(label)
+            self._schedule_preview_update(immediate=True)
+            dialog.destroy()
+            messagebox.showinfo('Sucesso', f'Definicao "{label}" criada e salva com sucesso!')
+
+        btn_row = ctk.CTkFrame(dialog, fg_color='transparent')
+        btn_row.pack(fill='x', padx=20, pady=(16, 10))
+        ctk.CTkButton(btn_row, text='Salvar Definicao', command=save_ratio).pack(side='left', expand=True, fill='x', padx=(0, 6))
+        ctk.CTkButton(btn_row, text='Cancelar', fg_color='#555555', hover_color='#444444', command=dialog.destroy).pack(side='right', expand=True, fill='x', padx=(6, 0))
+
+    def _on_crf_slider_change(self):
+        val = int(self.slider_crf.get())
+        if val != 0 and self.var_max_quality.get():
+            self.var_max_quality.set(False)
+        self._update_percentages()
+
+    def _on_toggle_max_quality(self):
+        if self.var_max_quality.get():
+            self.slider_crf.set(0)
+        else:
+            self.slider_crf.set(18)
+        self._update_percentages()
+
+    def _update_color_box(self):
+        color = self.entry_color.get().strip()
+        try:
+            self.color_preview_box.configure(fg_color=color)
+        except Exception:
+            pass
+
+    def _on_color_entry_change(self):
+        color = self.entry_color.get().strip()
+        self._update_color_box()
+        if re.fullmatch(r'[a-zA-Z]+|#[0-9a-fA-F]{6}|0x[0-9a-fA-F]{6}', color):
+            self._schedule_preview_update(immediate=True)
+
+    def _pick_bar_color(self):
+        current = self.entry_color.get().strip() or '#000000'
+        chosen = colorchooser.askcolor(color=current, title='Escolher cor das barras solidas')
+        if chosen and chosen[1]:
+            hex_color = chosen[1].lower()
+            self.entry_color.delete(0, 'end')
+            self.entry_color.insert(0, hex_color)
+            self._update_color_box()
+            self._schedule_preview_update(immediate=True)
 
     def _schedule_preview_update(self, immediate: bool = False):
         self._update_percentages()
@@ -627,7 +796,7 @@ class VideoConverterApp(ctk.CTk):
         # Valida antes de alterar controles para evitar uma configuracao parcial.
         target = data.get('target_preset', self.combo_target_preset.get())
         mode = data.get('mode', 'blur')
-        if target not in PRESET_RATIOS or mode not in ('blur', 'pillarbox', 'crop'):
+        if target not in self._get_all_target_preset_names() or mode not in ('blur', 'pillarbox', 'crop'):
             raise ValueError('Proporcao ou modo invalido na configuracao.')
         numeric = {'blur_strength': (0, 80, 35), 'sharpen_strength': (0, 2, 0),
                    'crf': (0, 51, 18), 'corte_inicio': (0, float('inf'), 0),
@@ -696,7 +865,10 @@ class VideoConverterApp(ctk.CTk):
         blur = int(self.slider_blur.get())
         crf = int(self.slider_crf.get())
         self.lbl_blur_value.configure(text=f'{blur / 80:.0%} ({blur})')
-        self.lbl_crf_value.configure(text=f'{(51-crf)/51:.0%} escala | CRF {crf}')
+        if crf == 0:
+            self.lbl_crf_value.configure(text='100% | Maxima (CRF 0)')
+        else:
+            self.lbl_crf_value.configure(text=f'{(51-crf)/51:.0%} escala | CRF {crf}')
         try:
             self.lbl_sharpen_value.configure(text=f'{float(self.var_sharpen.get().replace(",", "."))/2:.0%}')
             self.lbl_speed_value.configure(text=f'{float(self.var_speed.get().replace(",", ".")):.0%}')
@@ -977,8 +1149,9 @@ class VideoConverterApp(ctk.CTk):
         self.btn_clean_metadata.configure(state='disabled')
         self.progress_bar.set(0)
         self.lbl_pct.configure(text='0%')
+        unique_filename = bool(self.var_unique_filename.get())
         self._conversion_thread = threading.Thread(target=self._conversion_worker,
-            args=(tuple(self.input_files), options, self.entry_out_dir.get().strip(), metadata_only), daemon=True)
+            args=(tuple(self.input_files), options, self.entry_out_dir.get().strip(), metadata_only, unique_filename), daemon=True)
         self._conversion_thread.start()
 
     def _cancel_conversion(self):
@@ -986,7 +1159,7 @@ class VideoConverterApp(ctk.CTk):
             self.should_cancel = True
             self.lbl_status.configure(text='Cancelando processo...')
 
-    def _conversion_worker(self, files, options, custom_out_dir, metadata_only=False):
+    def _conversion_worker(self, files, options, custom_out_dir, metadata_only=False, unique_filename=False):
         successes, errors = 0, []
         w, h = options['target_resolution']
         for idx, file_path in enumerate(files, 1):
@@ -994,7 +1167,8 @@ class VideoConverterApp(ctk.CTk):
                 break
             base_dir = custom_out_dir or os.path.dirname(file_path)
             name = Path(file_path).stem
-            suffix = '_metadados_limpos' if metadata_only else f'_{w}x{h}'
+            unique_token = f'_{uuid.uuid4().hex[:8]}' if unique_filename else ''
+            suffix = f'_metadados_limpos{unique_token}' if metadata_only else f'_{w}x{h}{unique_token}'
             extension = Path(file_path).suffix if metadata_only else '.mp4'
             out_file = Path(base_dir) / f'{name}{suffix}{extension}'
             number = 2

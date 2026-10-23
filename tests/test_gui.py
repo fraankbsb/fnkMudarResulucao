@@ -155,3 +155,49 @@ class GuiTests(unittest.TestCase):
         self.wait_for(lambda: not app.is_converting)
         self.assertFalse(self.errors.called, self.errors.call_args)
         self.assertTrue((self.root / 'source_metadados_limpos.mp4').exists())
+
+
+    def test_unique_filename_option(self):
+        app = self.app
+        app.var_unique_filename.set(True)
+        app.entry_out_dir.insert(0, str(self.root))
+        app.btn_clean_metadata.invoke()
+        self.wait_for(lambda: not app.is_converting)
+        generated = list(self.root.glob('source_metadados_limpos_*.mp4'))
+        self.assertEqual(len(generated), 1, 'Arquivo com token unico deve ser gerado')
+        app.var_unique_filename.set(False)
+
+    def test_custom_ratio_definition_and_persistence(self):
+        app = self.app
+        custom_name = 'Custom Cinema 21:9 (2560x1080)'
+        app._custom_ratios[custom_name] = (2560, 1080)
+        app._save_custom_ratios()
+        names = app._get_all_target_preset_names()
+        self.assertIn(custom_name, names)
+        app.combo_target_preset.set(custom_name)
+        res = app._get_target_resolution()
+        self.assertEqual(res, (2560, 1080))
+        # Carregar em nova instancia de dicionario para simular persistencia
+        app._load_custom_ratios()
+        self.assertIn(custom_name, app._custom_ratios)
+
+    def test_max_quality_toggle_and_crf(self):
+        app = self.app
+        app.slider_crf.set(18)
+        self.assertIn('CRF 18', app.lbl_crf_value.cget('text'))
+        app.var_max_quality.set(True)
+        app._on_toggle_max_quality()
+        self.assertEqual(int(app.slider_crf.get()), 0)
+        self.assertIn('Maxima (CRF 0)', app.lbl_crf_value.cget('text'))
+        app.var_max_quality.set(False)
+        app._on_toggle_max_quality()
+        self.assertEqual(int(app.slider_crf.get()), 18)
+
+    def test_custom_hex_bar_color_support(self):
+        app = self.app
+        app.entry_color.delete(0, 'end')
+        app.entry_color.insert(0, '#336699')
+        app._on_color_entry_change()
+        self.assertEqual(app.combo_color.get(), '#336699')
+        options = app._get_options()
+        self.assertEqual(options['bg_color'], '#336699')
