@@ -773,7 +773,12 @@ class VideoConverterApp(ctk.CTk):
         path = filedialog.askopenfilename(title='Escolha a capa',
             filetypes=[('Imagens', '*.png *.jpg *.jpeg *.webp *.bmp')])
         if path:
-            self.var_cover.set(path)
+            try:
+                from core.converter import converter_imagem_capa_1080x1920
+                caminho_convertido = converter_imagem_capa_1080x1920(path)
+                self.var_cover.set(caminho_convertido)
+            except Exception as e:
+                self.var_cover.set(path)
             self._preview_position = 0.0
             self._schedule_preview_update(immediate=True)
 

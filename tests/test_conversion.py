@@ -243,6 +243,19 @@ class ConversionTests(unittest.TestCase):
         self.assertEqual(output.read_bytes(), b'existing file')
         self.assertFalse(list(self.root.glob('.fnk_*')))
 
+    def test_converter_imagem_capa_1080x1920(self):
+        import os
+        from PIL import Image
+        from core.converter import converter_imagem_capa_1080x1920
+        raw_img_path = self.root / 'capa_teste_horizontal.png'
+        img = Image.new('RGB', (1920, 1080), color=(255, 120, 0))
+        img.save(raw_img_path)
+
+        out_path = converter_imagem_capa_1080x1920(str(raw_img_path))
+        self.assertTrue(os.path.isfile(out_path))
+        with Image.open(out_path) as res:
+            self.assertEqual(res.size, (1080, 1920))
+
 
 if __name__ == '__main__':
     unittest.main()

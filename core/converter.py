@@ -127,6 +127,21 @@ def get_edit_timeline(metadata, corte_inicio=0.0, corte_fim=0.0, velocidade=1.0,
     return start, duration, speed, cover_duration, fps
 
 
+def converter_imagem_capa_1080x1920(caminho_imagem: str, caminho_saida: Optional[str] = None) -> str:
+    from PIL import Image, ImageOps
+    if not os.path.isfile(caminho_imagem):
+        raise ValueError(f'Imagem de capa nao encontrada: {caminho_imagem}')
+    if not caminho_saida:
+        diretorio = os.path.dirname(caminho_imagem)
+        nome, _ = os.path.splitext(os.path.basename(caminho_imagem))
+        caminho_saida = os.path.join(diretorio, f'{nome}_1080x1920.png')
+    with Image.open(caminho_imagem) as img:
+        img_rgb = img.convert('RGB')
+        encaixada = ImageOps.fit(img_rgb, (1080, 1920), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
+        encaixada.save(caminho_saida, format='PNG')
+    return caminho_saida
+
+
 def cover_filter(w, h, adjustment):
     if adjustment == 'preencher':
         result = (f'scale={w}:{h}:force_original_aspect_ratio=increase:force_divisible_by=2,'
