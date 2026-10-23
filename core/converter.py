@@ -154,8 +154,8 @@ def build_filter_complex(input_w, input_h, target_w, target_h, mode='blur',
     if mode == 'blur':
         return (f'[0:v:0]split=2[fg_in][bg_in];'
                 f'[bg_in]{fill},crop={w}:{h},'
-                f"boxblur=luma_radius='min({blur},min(w,h)/2)':luma_power=5:"
-                f"chroma_radius='min({blur},min(cw,ch)/2)':chroma_power=5,"
+                f"boxblur=luma_radius='min({blur},max(0,min(w,h)/2-1))':luma_power=5:"
+                f"chroma_radius='min({blur},max(0,min(cw,ch)/2-1))':chroma_power=5,"
                 f'eq=brightness=-0.08:saturation=1.1[bg];'
                 f'[fg_in]{fit}{sharpen}[fg];'
                 f'[bg][fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[outv]')
