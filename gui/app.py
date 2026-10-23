@@ -132,15 +132,21 @@ class VideoConverterApp(ctk.CTk):
 
         self.btn_select = ctk.CTkButton(
             btn_row, text='Selecionar Videos', command=self._select_videos,
-            font=ctk.CTkFont(size=14, weight='bold'), height=36
+            font=ctk.CTkFont(size=13, weight='bold'), height=36
         )
-        self.btn_select.pack(side='left', expand=True, fill='x', padx=(0, 5))
+        self.btn_select.pack(side='left', expand=True, fill='x', padx=(0, 4))
+
+        self.btn_select_folder = ctk.CTkButton(
+            btn_row, text='Selecionar Pasta', command=self._select_folder,
+            font=ctk.CTkFont(size=13, weight='bold'), height=36
+        )
+        self.btn_select_folder.pack(side='left', expand=True, fill='x', padx=(4, 4))
 
         self.btn_clear = ctk.CTkButton(
             btn_row, text='Limpar Fila', command=self._clear_videos,
-            fg_color='#555555', hover_color='#666666', width=100, height=36
+            fg_color='#555555', hover_color='#666666', width=90, height=36
         )
-        self.btn_clear.pack(side='right', padx=(5, 0))
+        self.btn_clear.pack(side='right', padx=(4, 0))
 
         self.lbl_queue_count = ctk.CTkLabel(
             file_sec, text='Nenhum video selecionado', font=ctk.CTkFont(size=12, slant='italic')
@@ -562,6 +568,30 @@ class VideoConverterApp(ctk.CTk):
                 restart_app()
         else:
             messagebox.showerror('Git Sync', message)
+
+    def _select_folder(self):
+        folder = filedialog.askdirectory(title='Selecione a Pasta com os Videos')
+        if folder and os.path.isdir(folder):
+            extensions = ('.mp4', '.mov', '.mkv', '.webm', '.avi', '.m4v')
+            novos = []
+            for root, _, files in os.walk(folder):
+                for f in sorted(files):
+                    if f.lower().endswith(extensions):
+                        p = os.path.abspath(os.path.join(root, f))
+                        if p not in self.input_files and p not in novos:
+                            novos.append(p)
+            if novos:
+                for p in novos:
+                    self.input_files.append(p)
+                    self.file_listbox.insert(tk.END, os.path.basename(p))
+                self.lbl_queue_count.configure(text=f'{len(self.input_files)} video(s) na fila')
+                if not self.selected_video_path or self.selected_video_path not in self.input_files:
+                    self.selected_video_path = self.input_files[0]
+                    self.file_listbox.selection_clear(0, tk.END)
+                    self.file_listbox.selection_set(0)
+                self._schedule_preview_update(immediate=True)
+            else:
+                messagebox.showinfo('Selecionar Pasta', 'Nenhum video encontrado na pasta selecionada.')
 
     def _select_videos(self):
         files = filedialog.askopenfilenames(
@@ -1180,6 +1210,7 @@ class VideoConverterApp(ctk.CTk):
         self.should_cancel = False
         self.btn_start.configure(state='disabled')
         self.btn_select.configure(state='disabled')
+        self.btn_select_folder.configure(state='disabled')
         self.btn_clear.configure(state='disabled')
         self.btn_cancel.configure(state='normal')
         self.btn_update.configure(state='disabled')
@@ -1246,7 +1277,7 @@ class VideoConverterApp(ctk.CTk):
 
     def _finish_conversion(self, successes, total, errors):
         self.is_converting = False
-        for button in (self.btn_start, self.btn_select, self.btn_clear, self.btn_update, self.btn_clean_metadata):
+        for button in (self.btn_start, self.btn_select, self.btn_select_folder, self.btn_clear, self.btn_update, self.btn_clean_metadata):
             button.configure(state='normal')
         self.btn_cancel.configure(state='disabled')
         if self.selected_video_path:

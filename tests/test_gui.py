@@ -234,3 +234,26 @@ class GuiTests(unittest.TestCase):
         opts2 = app._get_options()
         self.assertEqual(opts2['bg_color'], '#123456')
         self.assertFalse(opts2['auto_cor_fundo'])
+
+    def test_select_folder_loads_videos(self):
+        app = self.app
+        # Criar pasta temporaria com videos
+        import tempfile, shutil
+        temp_dir = tempfile.mkdtemp(prefix="test_folder_videos_")
+        try:
+            v1 = os.path.join(temp_dir, "video1.mp4")
+            v2 = os.path.join(temp_dir, "video2.mov")
+            other = os.path.join(temp_dir, "ignore.txt")
+            with open(v1, "wb") as fp: fp.write(b"dummy1")
+            with open(v2, "wb") as fp: fp.write(b"dummy2")
+            with open(other, "wb") as fp: fp.write(b"text")
+
+            # Mock do filedialog.askdirectory
+            from unittest.mock import patch
+            with patch("tkinter.filedialog.askdirectory", return_value=temp_dir):
+                app._select_folder()
+            self.assertIn(os.path.abspath(v1), app.input_files)
+            self.assertIn(os.path.abspath(v2), app.input_files)
+            self.assertNotIn(os.path.abspath(other), app.input_files)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
