@@ -138,7 +138,15 @@ def converter_imagem_capa_1080x1920(caminho_imagem: str, caminho_saida: Optional
     with Image.open(caminho_imagem) as img:
         img_rgb = img.convert('RGB')
         encaixada = ImageOps.fit(img_rgb, (1080, 1920), method=Image.Resampling.LANCZOS, centering=(0.5, 0.5))
-        encaixada.save(caminho_saida, format='PNG')
+        # Higienizacao forense: cria imagem pura do zero sem transferir info, exif, gps ou chunks de software
+        pura = Image.new('RGB', (1080, 1920))
+        pura.paste(encaixada)
+        pura.save(caminho_saida, format='PNG')
+    try:
+        now = time.time()
+        os.utime(caminho_saida, (now, now))
+    except Exception:
+        pass
     return caminho_saida
 
 

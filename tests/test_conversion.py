@@ -281,12 +281,17 @@ class ConversionTests(unittest.TestCase):
         from core.converter import converter_imagem_capa_1080x1920
         raw_img_path = self.root / 'capa_teste_horizontal.png'
         img = Image.new('RGB', (1920, 1080), color=(255, 120, 0))
+        img.info['author'] = 'dispositivo_rastreavel_123'
+        img.info['comment'] = 'localizacao_gps_privada'
         img.save(raw_img_path)
 
         out_path = converter_imagem_capa_1080x1920(str(raw_img_path))
         self.assertTrue(os.path.isfile(out_path))
         with Image.open(out_path) as res:
             self.assertEqual(res.size, (1080, 1920))
+            # Higienizacao forense: metadados removidos e info limpo
+            self.assertNotIn('author', res.info)
+            self.assertNotIn('comment', res.info)
 
 
 if __name__ == '__main__':
