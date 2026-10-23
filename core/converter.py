@@ -1,3 +1,4 @@
+import time
 import json
 import uuid
 import math
@@ -248,10 +249,18 @@ def convert_video(
 
 
 def identity_args(output_path, enabled):
-    # UUID identifica esta copia, sem inventar fabricante, modelo, GPS ou serial.
+    # UUID e tags Android camera/device: simulam video gerado e gravado nativamente em Android
     if not enabled:
         return []
-    return ['-metadata', f'content_identifier={uuid.uuid4()}']
+    uid = uuid.uuid4()
+    now_str = time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())
+    return [
+        '-metadata', f'content_identifier={uid}',
+        '-metadata', f'android.version=14',
+        '-metadata', f'creation_time={now_str}',
+        '-metadata:s:v:0', f'creation_time={now_str}',
+        '-metadata:s:a:0', f'creation_time={now_str}'
+    ]
 
 
 def metadata_removal_args(output_path):

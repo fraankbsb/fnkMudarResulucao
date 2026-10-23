@@ -789,7 +789,7 @@ class VideoConverterApp(ctk.CTk):
         return dict(mode=self.var_mode.get(), target_resolution=self._get_target_resolution(),
                     blur_strength=int(self.slider_blur.get()), bg_color=self.combo_color.get(),
                     crf=int(self.slider_crf.get()), limpar_metadados=self.var_clean_metadata.get(),
-                    identidade_unica=self.var_unique_identity.get(), perfil_celular=self.var_mobile_profile.get(),
+                    identidade_unica=self.var_unique_identity.get(), nome_unico=self.var_unique_filename.get(), perfil_celular=self.var_mobile_profile.get(),
                     **self._get_edit_options())
 
     def _apply_preset_data(self, data):
@@ -821,6 +821,7 @@ class VideoConverterApp(ctk.CTk):
             variable.set(data.get(key) or default)
         self.var_clean_metadata.set(bool(data.get('limpar_metadados', True)))
         self.var_unique_identity.set(bool(data.get('identidade_unica', True)))
+        self.var_unique_filename.set(bool(data.get('nome_unico', False)))
         self.var_mobile_profile.set(bool(data.get('perfil_celular', True)))
         self._update_percentages()
         self.var_mirror.set(bool(data.get('espelhar', False)))
@@ -1188,6 +1189,12 @@ class VideoConverterApp(ctk.CTk):
                 if function(file_path, str(out_file), **arguments,
                             progress_callback=progress, cancel_check=lambda: self.should_cancel):
                     successes += 1
+                    if unique_filename and out_file.exists():
+                        try:
+                            now = time.time()
+                            os.utime(str(out_file), (now, now))
+                        except Exception:
+                            pass
             except Exception as error:
                 errors.append(f'{os.path.basename(file_path)}: {error}')
         self._post_ui(lambda: self._finish_conversion(successes, len(files), errors))

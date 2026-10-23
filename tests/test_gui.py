@@ -201,3 +201,20 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(app.combo_color.get(), '#336699')
         options = app._get_options()
         self.assertEqual(options['bg_color'], '#336699')
+
+
+    def test_preset_saves_and_restores_metadata_options(self):
+        app = self.app
+        app.var_unique_filename.set(True)
+        app.var_unique_identity.set(True)
+        app.var_clean_metadata.set(True)
+        app.var_mobile_profile.set(True)
+        opts = app._get_options()
+        self.assertTrue(opts['nome_unico'])
+        self.assertTrue(opts['identidade_unica'])
+        self.assertTrue(opts['limpar_metadados'])
+        self.assertTrue(opts['perfil_celular'])
+        # Simular carregamento de preset
+        dummy_preset = {'target_preset': list(app._get_all_target_preset_names())[0], 'mode': 'blur', 'nome_unico': False}
+        app._apply_preset_data(dummy_preset)
+        self.assertFalse(app.var_unique_filename.get())
