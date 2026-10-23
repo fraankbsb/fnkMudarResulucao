@@ -234,9 +234,9 @@ def convert_video(
             filters += (f';[0:a:0]asetpts=PTS-STARTPTS,aresample=48000,{_atempo(speed)},'
                         f'adelay={round(cover_duration * 48000)}S:all=1,'
                         f'apad,atrim=end_sample={round(total * 48000)},asetpts=N/SR/TB[outa]')
-            audio_args = ['-map', '[outa]', '-c:a', 'aac', '-b:a', '192k']
+            audio_args = ['-map', '[outa]', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2']
     cmd += ['-filter_complex', filters, '-map', map_video, *audio_args,
-            '-c:v', 'libx264', '-preset', preset, '-crf', str(crf), '-pix_fmt', 'yuv420p']
+            '-c:v', 'libx264', '-preset', preset, '-crf', str(crf), '-profile:v', 'high', '-level:v', '4.1', '-pix_fmt', 'yuv420p']
     if limpar_metadados:
         cmd += metadata_removal_args(output_path)
     else:

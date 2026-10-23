@@ -172,7 +172,7 @@ class VideoConverterApp(ctk.CTk):
             width=280,
             command=lambda _: self._schedule_preview_update(immediate=True)
         )
-        self.combo_target_preset.set('4:5 (Feed Instagram/FB - 1080x1350)')
+        self.combo_target_preset.set('9:16 (Stories/Reels/TikTok - 1080x1920)')
         self.combo_target_preset.pack(side='left', fill='x', expand=True, padx=(0, 6))
 
         self.btn_new_ratio = ctk.CTkButton(
@@ -280,7 +280,7 @@ class VideoConverterApp(ctk.CTk):
         edit_sec = ctk.CTkFrame(left_panel, corner_radius=8)
         edit_sec.pack(fill='x', padx=10, pady=8)
         ctk.CTkLabel(edit_sec, text='Edicao do Video', font=ctk.CTkFont(weight='bold')).pack(anchor='w', padx=10, pady=8)
-        self.var_sharpen = tk.StringVar(value='0')
+        self.var_sharpen = tk.StringVar(value='0.8')
         self.var_start = tk.StringVar(value='0.25')
         self.var_end = tk.StringVar(value='0.25')
         self.var_speed = tk.StringVar(value='1')
