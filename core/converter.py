@@ -278,7 +278,8 @@ def convert_video(
     identidade_unica: bool = False,
     perfil_celular: bool = False,
     progress_callback: Optional[Callable[[float, str], None]] = None,
-    cancel_check: Optional[Callable[[], bool]] = None
+    cancel_check: Optional[Callable[[], bool]] = None,
+    **kwargs
 ) -> bool:
     input_path, output_path = os.path.abspath(input_path), os.path.abspath(output_path)
     same_path = os.path.normcase(input_path) == os.path.normcase(output_path)
@@ -323,8 +324,9 @@ def convert_video(
                         f'adelay={round(cover_duration * 48000)}S:all=1,'
                         f'apad,atrim=end_sample={round(total * 48000)},asetpts=N/SR/TB[outa]')
             audio_args = ['-map', '[outa]', '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2']
+    profile_args = ['-profile:v', 'high', '-level:v', '4.1'] if crf > 0 else []
     cmd += ['-filter_complex', filters, '-map', map_video, *audio_args,
-            '-c:v', 'libx264', '-preset', preset, '-crf', str(crf), '-profile:v', 'high', '-level:v', '4.1', '-pix_fmt', 'yuv420p']
+            '-c:v', 'libx264', '-preset', preset, '-crf', str(crf), *profile_args, '-pix_fmt', 'yuv420p']
     if limpar_metadados:
         cmd += metadata_removal_args(output_path)
     else:
@@ -359,7 +361,7 @@ def metadata_removal_args(output_path):
     return args
 
 
-def clean_metadata(input_path, output_path, progress_callback=None, cancel_check=None, identidade_unica=False):
+def clean_metadata(input_path, output_path, progress_callback=None, cancel_check=None, identidade_unica=False, **kwargs):
     """Remuxa video/audio sem recodificar; mantem orientacao e dados tecnicos."""
     input_path, output_path = os.path.abspath(input_path), os.path.abspath(output_path)
     if os.path.normcase(input_path) == os.path.normcase(output_path) or (

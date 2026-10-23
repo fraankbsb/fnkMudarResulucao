@@ -1255,9 +1255,20 @@ class VideoConverterApp(ctk.CTk):
                 arguments = {'identidade_unica': options['identidade_unica']} if metadata_only else dict(options)
                 if not metadata_only:
                     arguments.pop('auto_cor_fundo', None)
+                    arguments.pop('nome_unico', None)
                     if (getattr(self, 'var_auto_color', None) and self.var_auto_color.get()) or str(arguments.get('bg_color')).lower() in ('auto', 'detectar'):
                         from core.converter import detectar_cor_fundo_video
                         arguments['bg_color'] = detectar_cor_fundo_video(file_path)
+                    try:
+                        from core.converter import get_video_metadata
+                        meta = get_video_metadata(file_path)
+                        c_ini = float(arguments.get('corte_inicio', 0))
+                        c_fim = float(arguments.get('corte_fim', 0))
+                        if meta.duration <= (c_ini + c_fim):
+                            arguments['corte_inicio'] = 0.0
+                            arguments['corte_fim'] = 0.0
+                    except Exception:
+                        pass
                 if function(file_path, str(out_file), **arguments,
                             progress_callback=progress, cancel_check=lambda: self.should_cancel):
                     successes += 1

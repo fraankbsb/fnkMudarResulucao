@@ -165,3 +165,9 @@ Na CLI, essas duas opcoes sao explicitas:
 python main.py --cli -i "video.mp4" --perfil-celular --identidade-unica
 python main.py --cli -i "video.mp4" --somente-limpar-metadados --identidade-unica
 ```
+
+### Versao 1.0.10
+- Correcao no encoder x264 ao utilizar Qualidade Maxima (crf 0) evitando conflitos de perfil High Level 4.1.
+- Compatibilidade com argumentos extras de UI (nome_unico, auto_cor_fundo) sem disparar TypeError.
+- Protecao inteligente em lote para videos com duracao inferior a soma dos cortes configurados.
+- Validacao e testes reais de processamento de lote com multiplos cenarios.
